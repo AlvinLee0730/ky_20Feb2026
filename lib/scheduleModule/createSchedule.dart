@@ -15,10 +15,10 @@ class CreateSchedulePage extends StatefulWidget {
 
 class _CreateSchedulePageState extends State<CreateSchedulePage> {
   String? _selectedPetId;
-  final _titleController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  String _scheduleType = 'Activity';
+  String? _selectedTitle;
+  String? _selectedType;
   String _repeatType = 'None';
+  final _descriptionController = TextEditingController();
 
   DateTime? _selectedDate;
   TimeOfDay? _startTime;
@@ -26,6 +26,12 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
 
   bool _isLoading = false;
 
+  // Map of ScheduleType → Titles
+  final Map<String, List<String>> scheduleTypeToTitle = {
+    'Activity': ['Feed', 'Walk', 'Play Ball', 'Training'],
+    'Medical': ['Vaccination', 'Checkup', 'Medication'],
+    'Grooming': ['Bath', 'Haircut', 'Nail Trim'],
+  };
 
   Future<void> _pickDate() async {
     final today = DateTime.now();
@@ -37,7 +43,6 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
     );
     if (picked != null) setState(() => _selectedDate = picked);
   }
-
 
   Future<void> _pickTime(bool isStart) async {
     final picked = await showTimePicker(
@@ -55,13 +60,13 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
     }
   }
 
-
   Future<void> _createSchedule() async {
     if (_selectedPetId == null ||
         _selectedDate == null ||
         _startTime == null ||
         _endTime == null ||
-        _titleController.text.isEmpty) {
+        _selectedType == null ||
+        _selectedTitle == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill all required fields')),
       );
@@ -80,8 +85,8 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
 
       await supabase.from('schedule').insert({
         'petID': _selectedPetId,
-        'scheduleType': _scheduleType,
-        'title': _titleController.text.trim(),
+        'scheduleType': _selectedType,
+        'title': _selectedTitle,
         'description': _descriptionController.text.trim(),
         'date': dateString,
         'startTime': startTimeString,
@@ -105,7 +110,6 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
 
   @override
   void dispose() {
-    _titleController.dispose();
     _descriptionController.dispose();
     super.dispose();
   }
@@ -113,34 +117,61 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Create Schedule'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('Create Schedule'), centerTitle: true),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
 
+            // Pet selection
             DropdownButtonFormField<String>(
               value: _selectedPetId,
               decoration: const InputDecoration(labelText: 'Select Pet'),
               items: widget.pets
-                  .map<DropdownMenuItem<String>>((pet) => DropdownMenuItem<String>(
+                  .map<DropdownMenuItem<String>>((pet) => DropdownMenuItem(
                 value: pet['petID'].toString(),
                 child: Text(pet['petName'] ?? 'No Name'),
               ))
                   .toList(),
-              onChanged: (value) => setState(() => _selectedPetId = value),
+              onChanged: (val) => setState(() => _selectedPetId = val),
             ),
             const SizedBox(height: 16),
 
-
-            TextField(
-              controller: _titleController,
-              decoration: const InputDecoration(labelText: 'Title'),
+            // Schedule Type selection
+            DropdownButtonFormField<String>(
+              value: _selectedType,
+              decoration: const InputDecoration(labelText: 'Schedule Type'),
+              items: scheduleTypeToTitle.keys
+                  .map((type) => DropdownMenuItem(
+                value: type,
+                child: Text(type),
+              ))
+                  .toList(),
+              onChanged: (val) {
+                setState(() {
+                  _selectedType = val;
+                  _selectedTitle = null; // 重置 title
+                });
+              },
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 16),
+
+            // Title selection (depends on selected type)
+            if (_selectedType != null)
+              DropdownButtonFormField<String>(
+                value: _selectedTitle,
+                decoration: const InputDecoration(labelText: 'Title'),
+                items: scheduleTypeToTitle[_selectedType]!
+                    .map((title) => DropdownMenuItem(
+                  value: title,
+                  child: Text(title),
+                ))
+                    .toList(),
+                onChanged: (val) => setState(() => _selectedTitle = val),
+              ),
+            const SizedBox(height: 16),
+
+            // Description
             TextField(
               controller: _descriptionController,
               decoration: const InputDecoration(labelText: 'Description'),
@@ -148,26 +179,12 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
             ),
             const SizedBox(height: 16),
 
-
-            DropdownButtonFormField<String>(
-              value: _scheduleType,
-              decoration: const InputDecoration(labelText: 'Schedule Type'),
-              items: ['Activity', 'Medical', 'Other']
-                  .map((type) => DropdownMenuItem<String>(
-                value: type,
-                child: Text(type),
-              ))
-                  .toList(),
-              onChanged: (val) => setState(() => _scheduleType = val!),
-            ),
-            const SizedBox(height: 16),
-
-
+            // Repeat Type
             DropdownButtonFormField<String>(
               value: _repeatType,
               decoration: const InputDecoration(labelText: 'Repeat Type'),
               items: ['None', 'Daily', 'Weekly', 'Monthly']
-                  .map((type) => DropdownMenuItem<String>(
+                  .map((type) => DropdownMenuItem(
                 value: type,
                 child: Text(type),
               ))
@@ -176,7 +193,7 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
             ),
             const SizedBox(height: 16),
 
-
+            // Date & Time pickers
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [

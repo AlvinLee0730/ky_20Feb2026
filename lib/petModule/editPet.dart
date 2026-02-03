@@ -1,11 +1,12 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 final supabase = Supabase.instance.client;
 
 class EditPetPage extends StatefulWidget {
   final Map petData;
-
   const EditPetPage({super.key, required this.petData});
 
   @override
@@ -13,179 +14,124 @@ class EditPetPage extends StatefulWidget {
 }
 
 class _EditPetPageState extends State<EditPetPage> {
-  late TextEditingController _nameController;
-  late TextEditingController _speciesController;
-  late TextEditingController _breedController;
-  late TextEditingController _ageController;
+  late TextEditingController _name;
+  late TextEditingController _species;
+  late TextEditingController _breed;
+  late TextEditingController _remarks;
 
-  bool _isLoading = false;
+  DateTime? _birthDate;
+  File? _imageFile;
+  bool _loading = false;
 
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.petData['petName']);
-    _speciesController = TextEditingController(text: widget.petData['species']);
-    _breedController = TextEditingController(text: widget.petData['breed']);
-    _ageController = TextEditingController(text: widget.petData['age'].toString());
+    _name = TextEditingController(text: widget.petData['petName']);
+    _species = TextEditingController(text: widget.petData['species']);
+    _breed = TextEditingController(text: widget.petData['breed']);
+    _remarks = TextEditingController(text: widget.petData['remarks']);
+    _birthDate = DateTime.tryParse(widget.petData['birthDate'] ?? '');
   }
 
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+    if (picked != null) {
+      setState(() => _imageFile = File(picked.path));
+    }
+  }
+
+  Future<String?> _uploadImage() async {
+    if (_imageFile == null) return widget.petData['petPhoto'];
+
+    final fileName =
+        '${widget.petData['petID']}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+    await supabase.storage
+        .from('pet_photos')   // <- 改成你的 bucket 名
+        .upload(fileName, _imageFile!);
+
+    return supabase.storage
+        .from('pet_photos')
+        .getPublicUrl(fileName);
+  }
 
   Future<void> _updatePet() async {
-    final name = _nameController.text.trim();
-    final species = _speciesController.text.trim();
-    final breed = _breedController.text.trim();
-    final ageText = _ageController.text.trim();
+    if (_birthDate == null) return;
 
-    if (name.isEmpty || species.isEmpty || breed.isEmpty || ageText.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill all fields')),
-      );
-      return;
-    }
-
-    final age = int.tryParse(ageText);
-    if (age == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Age must be a number')),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
+    setState(() => _loading = true);
     try {
-      await supabase
-          .from('pet')
-          .update({
-        'petName': name,
-        'species': species,
-        'breed': breed,
-        'age': age,
-      })
-          .eq('petID', widget.petData['petID']);
+      final imageUrl = await _uploadImage();
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pet updated successfully!')),
-      );
+      await supabase.from('pet').update({
+        'petName': _name.text.trim(),
+        'species': _species.text.trim(),
+        'breed': _breed.text.trim(),
+        'birthDate': _birthDate!.toIso8601String(),
+        'petPhoto': imageUrl,
+        'remarks': _remarks.text.trim(),
+      }).eq('petID', widget.petData['petID']);
 
       Navigator.pop(context);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
-      setState(() => _isLoading = false);
+      setState(() => _loading = false);
     }
-  }
-
-
-  Future<void> _deletePet() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Pet'),
-        content: const Text('Are you sure you want to delete this pet?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-
-    setState(() => _isLoading = true);
-
-    try {
-      await supabase
-          .from('pet')
-          .delete()
-          .eq('petID', widget.petData['petID']);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pet deleted successfully!')),
-      );
-
-      Navigator.pop(context);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _speciesController.dispose();
-    _breedController.dispose();
-    _ageController.dispose();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Edit Pet'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('Edit Pet')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            CircleAvatar(
-              radius: 50,
-              backgroundImage: NetworkImage(
-                widget.petData['petPhoto'] ??
-                    'https://example.com/default_pet.png',
+            GestureDetector(
+              onTap: _pickImage,
+              child: CircleAvatar(
+                radius: 50,
+                backgroundImage: _imageFile != null
+                    ? FileImage(_imageFile!)
+                    : widget.petData['petPhoto'] != null
+                    ? NetworkImage(widget.petData['petPhoto'])
+                    : const AssetImage('assets/default_pet.png')
+                as ImageProvider,
               ),
             ),
-            const SizedBox(height: 16),
-
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Pet Name'),
-            ),
-            TextField(
-              controller: _speciesController,
-              decoration: const InputDecoration(labelText: 'Species'),
-            ),
-            TextField(
-              controller: _breedController,
-              decoration: const InputDecoration(labelText: 'Breed'),
-            ),
-            TextField(
-              controller: _ageController,
-              decoration: const InputDecoration(labelText: 'Age'),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 32),
-
-            _isLoading
-                ? const CircularProgressIndicator()
-                : Column(
+            TextField(controller: _name, decoration: const InputDecoration(labelText: 'Pet Name')),
+            TextField(controller: _species, decoration: const InputDecoration(labelText: 'Species')),
+            TextField(controller: _breed, decoration: const InputDecoration(labelText: 'Breed')),
+            TextField(controller: _remarks, decoration: const InputDecoration(labelText: 'Remarks')),
+            const SizedBox(height: 12),
+            Row(
               children: [
-                ElevatedButton(
-                  onPressed: _updatePet,
-                  child: const Text('Confirm Edit'),
-                ),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: _deletePet,
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                  child: const Text('Delete Pet'),
-                ),
+                Text(_birthDate == null
+                    ? 'Select birth date'
+                    : _birthDate!.toLocal().toString().split(' ')[0]),
+                IconButton(
+                  icon: const Icon(Icons.calendar_today),
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime.now(),
+                      initialDate: _birthDate ?? DateTime.now(),
+                    );
+                    if (picked != null) setState(() => _birthDate = picked);
+                  },
+                )
               ],
             ),
+            const SizedBox(height: 24),
+            _loading
+                ? const CircularProgressIndicator()
+                : ElevatedButton(
+              onPressed: _updatePet,
+              child: const Text('Save'),
+            )
           ],
         ),
       ),

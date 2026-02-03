@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 final supabase = Supabase.instance.client;
@@ -11,35 +13,49 @@ class AddPetPage extends StatefulWidget {
 }
 
 class _AddPetPageState extends State<AddPetPage> {
-  final _nameController = TextEditingController();
-  final _speciesController = TextEditingController();
-  final _breedController = TextEditingController();
-  final _ageController = TextEditingController();
+  final _name = TextEditingController();
+  final _species = TextEditingController();
+  final _breed = TextEditingController();
+  final _remarks = TextEditingController();
 
-  bool _isLoading = false;
+  DateTime? _birthDate;
+  File? _imageFile;
+  bool _loading = false;
+
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+    if (picked != null) {
+      setState(() => _imageFile = File(picked.path));
+    }
+  }
+
+  Future<String?> _uploadImage(String petID) async {
+    if (_imageFile == null) return null;
+
+    final fileName = '${petID}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+    await supabase.storage
+        .from('pet_photos')  // <- 改成你的 bucket 名
+        .upload(fileName, _imageFile!);
+
+    return supabase.storage
+        .from('pet_photos')
+        .getPublicUrl(fileName);
+  }
 
   Future<void> _addPet() async {
-    final name = _nameController.text.trim();
-    final species = _speciesController.text.trim();
-    final breed = _breedController.text.trim();
-    final ageText = _ageController.text.trim();
-
-    if (name.isEmpty || species.isEmpty || breed.isEmpty || ageText.isEmpty) {
+    if (_name.text.isEmpty ||
+        _species.text.isEmpty ||
+        _breed.text.isEmpty ||
+        _birthDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill all fields')),
       );
       return;
     }
 
-    final age = int.tryParse(ageText);
-    if (age == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Age must be a number')),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
+    setState(() => _loading = true);
 
     try {
       final user = supabase.auth.currentUser;
@@ -50,83 +66,80 @@ class _AddPetPageState extends State<AddPetPage> {
         return;
       }
 
+      // 生成 petID
+      final petID = 'P${DateTime.now().millisecondsSinceEpoch}';
+
+      final imageUrl = await _uploadImage(petID);
 
       await supabase.from('pet').insert({
-        'userID': user.id,
-        'petName': name,
-        'species': species,
-        'breed': breed,
-        'age': age,
-        'petPhoto': 'https://example.com/default_pet.png', // 默认头像
+        'userID': user.id,   // userID 也是 UUID
+        'petName': _name.text.trim(),
+        'species': _species.text.trim(),
+        'breed': _breed.text.trim(),
+        'birthDate': _birthDate!.toIso8601String(),
+        'petPhoto': imageUrl,
+        'remarks': _remarks.text.trim(),
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pet added successfully!')),
-      );
 
       Navigator.pop(context);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
-      setState(() => _isLoading = false);
+      setState(() => _loading = false);
     }
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _speciesController.dispose();
-    _breedController.dispose();
-    _ageController.dispose();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Add Pet'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('Add Pet')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-
-            CircleAvatar(
-              radius: 50,
-              backgroundImage:
-              const NetworkImage('https://example.com/default_pet.png'),
+            GestureDetector(
+              onTap: _pickImage,
+              child: CircleAvatar(
+                radius: 50,
+                backgroundImage: _imageFile != null
+                    ? FileImage(_imageFile!)
+                    : const AssetImage('assets/default_pet.png')
+                as ImageProvider,
+              ),
             ),
-            const SizedBox(height: 16),
-
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Pet Name'),
+            TextField(controller: _name, decoration: const InputDecoration(labelText: 'Pet Name')),
+            TextField(controller: _species, decoration: const InputDecoration(labelText: 'Species')),
+            TextField(controller: _breed, decoration: const InputDecoration(labelText: 'Breed')),
+            TextField(controller: _remarks, decoration: const InputDecoration(labelText: 'Remarks')),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Text(_birthDate == null
+                    ? 'Select birth date'
+                    : _birthDate!.toLocal().toString().split(' ')[0]),
+                IconButton(
+                  icon: const Icon(Icons.calendar_today),
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime.now(),
+                      initialDate: _birthDate ?? DateTime.now(),
+                    );
+                    if (picked != null) setState(() => _birthDate = picked);
+                  },
+                )
+              ],
             ),
-            TextField(
-              controller: _speciesController,
-              decoration: const InputDecoration(labelText: 'Species'),
-            ),
-            TextField(
-              controller: _breedController,
-              decoration: const InputDecoration(labelText: 'Breed'),
-            ),
-            TextField(
-              controller: _ageController,
-              decoration: const InputDecoration(labelText: 'Age'),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 32),
-
-            _isLoading
+            const SizedBox(height: 24),
+            _loading
                 ? const CircularProgressIndicator()
                 : ElevatedButton(
               onPressed: _addPet,
               child: const Text('Add Pet'),
-            ),
+            )
           ],
         ),
       ),

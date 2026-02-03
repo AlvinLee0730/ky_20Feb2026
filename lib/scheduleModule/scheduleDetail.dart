@@ -9,7 +9,6 @@ class ScheduleDetailPage extends StatelessWidget {
   const ScheduleDetailPage({super.key, required this.schedule});
 
   void _goToEdit(BuildContext context) async {
-
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
@@ -17,9 +16,8 @@ class ScheduleDetailPage extends StatelessWidget {
       ),
     );
 
-
     if (result == true) {
-      Navigator.pop(context, true);
+      Navigator.pop(context, true); // 返回上一页刷新
     }
   }
 
@@ -30,6 +28,18 @@ class ScheduleDetailPage extends StatelessWidget {
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
     }
+  }
+
+  String _formatTime(String? t) {
+    if (t == null) return '-';
+    final parts = t.split(':');
+    return '${parts[0]}:${parts[1]}';
+  }
+
+  String _formatDate(String? d) {
+    if (d == null) return '-';
+    final parts = d.split('-');
+    return '${parts[2]}/${parts[1]}/${parts[0]}'; // DD/MM/YYYY
   }
 
   @override
@@ -46,13 +56,28 @@ class ScheduleDetailPage extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Title: ${schedule['title'] ?? '-'}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              // 显示 Pet Name，如果没有则显示 petID
+              Text(
+                'Pet: ${schedule['petName'] ?? schedule['petID'] ?? '-'}',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
+              ),
               const SizedBox(height: 8),
+
+              Text(
+                'Title: ${schedule['title'] ?? '-'}',
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+
               Text('Type: ${schedule['scheduleType'] ?? '-'}'),
-              Text('Date: ${schedule['date'] ?? '-'}'),
-              Text('Time: ${schedule['startTime'] ?? '-'} - ${schedule['endTime'] ?? '-'}'),
+              Text('Date: ${_formatDate(schedule['date'])}'),
+              Text(
+                'Time: ${_formatTime(schedule['startTime'])} - ${_formatTime(schedule['endTime'])}',
+              ),
               Text('Repeat: ${schedule['repeatType'] ?? '-'}'),
+              Text('Description: ${schedule['description'] ?? '-'}'),
               const SizedBox(height: 32),
+
               Row(
                 children: [
                   Expanded(

@@ -23,6 +23,18 @@ class _PetProfilePageState extends State<PetProfilePage> {
     _loadPets();
   }
 
+  // 计算年龄
+  int? calculateAge(String? birthDate) {
+    if (birthDate == null) return null;
+    final dob = DateTime.tryParse(birthDate);
+    if (dob == null) return null;
+    final today = DateTime.now();
+    int age = today.year - dob.year;
+    if (today.month < dob.month || (today.month == dob.month && today.day < dob.day)) {
+      age--;
+    }
+    return age;
+  }
 
   Future<void> _loadPets() async {
     setState(() => _isLoading = true);
@@ -48,7 +60,6 @@ class _PetProfilePageState extends State<PetProfilePage> {
     }
   }
 
-
   Widget _buildTopButtons() {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
@@ -57,7 +68,6 @@ class _PetProfilePageState extends State<PetProfilePage> {
         children: [
           ElevatedButton(
             onPressed: () async {
-
               await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => const AddPetPage()),
@@ -68,9 +78,7 @@ class _PetProfilePageState extends State<PetProfilePage> {
           ),
           ElevatedButton(
             onPressed: () {
-
               final petIds = pets.map((pet) => pet['petID'].toString()).toList();
-
 
               Navigator.push(
                 context,
@@ -85,9 +93,7 @@ class _PetProfilePageState extends State<PetProfilePage> {
             child: const Text('Schedule'),
           ),
           ElevatedButton(
-            onPressed: () {
-
-            },
+            onPressed: () {},
             child: const Text('Food & Nutrition'),
           ),
         ],
@@ -95,22 +101,23 @@ class _PetProfilePageState extends State<PetProfilePage> {
     );
   }
 
-
   Widget _buildPetCard(Map<String, dynamic> pet) {
+    final age = calculateAge(pet['birthDate']);
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       child: ListTile(
         leading: CircleAvatar(
           radius: 30,
-          backgroundImage: NetworkImage(
-            pet['petPhoto'] ?? 'https://example.com/default_pet.png',
-          ),
+          backgroundImage: pet['petPhoto'] != null
+              ? NetworkImage(pet['petPhoto'])
+              : const AssetImage('assets/default_pet.png') as ImageProvider,
         ),
         title: Text(pet['petName'] ?? 'No Name'),
         subtitle: Text(
           'Species: ${pet['species'] ?? '-'}\n'
               'Breed: ${pet['breed'] ?? '-'}\n'
-              'Age: ${pet['age'] ?? '-'}',
+              'Age: ${age != null ? age : '-'}',
         ),
         isThreeLine: true,
         trailing: IconButton(

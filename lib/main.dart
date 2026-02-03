@@ -1,41 +1,91 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'userModule/login_page.dart';
-import 'userModule/profile_page.dart';
+
+// Your existing local files
+import 'lost_and_found.dart';
+import 'pet_adoption.dart';
+import 'education.dart';
+import 'expense_tracking.dart';
+import 'admin_approval.dart';
+import 'user_management.dart';
+import 'chat.dart';
+import 'forum.dart';
+import 'user_profile.dart'; // <- 新拆出的 ProfilePage
 import 'petModule/petProfile.dart';
 
-
-const String supabaseUrl ='https://zbmxmfnsqlkzguumlfip.supabase.co';
-const String supabaseKey ='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpibXhtZm5zcWxremd1dW1sZmlwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2NDc0NDUsImV4cCI6MjA4NDIyMzQ0NX0.c7esc22nznThDauT9wKUDvXHdSMZGqECyPFw6I4GQ4Y';
-
-Future<void> main() async {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   await Supabase.initialize(
-    url: supabaseUrl,
-    anonKey: supabaseKey,
+    url: 'https://zbmxmfnsqlkzguumlfip.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpibXhtZm5zcWxremd1dW1sZmlwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2NDc0NDUsImV4cCI6MjA4NDIyMzQ0NX0.c7esc22nznThDauT9wKUDvXHdSMZGqECyPFw6I4GQ4Y',
   );
-  runApp(const MyApp());
+
+  runApp(const PetCareApp());
 }
 
-final supabase = Supabase.instance.client;
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class PetCareApp extends StatelessWidget {
+  const PetCareApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const LoginPage(), // 默认启动 LoginPage
       debugShowCheckedModeBanner: false,
+      title: 'PetCare Hub',
+      theme: ThemeData(
+        primarySwatch: Colors.teal,
+        useMaterial3: true,
+        scaffoldBackgroundColor: Colors.grey[50],
+      ),
+      home: const LoginPage(),
     );
   }
 }
 
-// ==================== Home Page + BottomNavigationBar ====================
+class MainNavigation extends StatefulWidget {
+  const MainNavigation({super.key});
+
+  @override
+  State<MainNavigation> createState() => _MainNavigationState();
+}
+
+class _MainNavigationState extends State<MainNavigation> {
+  int _selectedIndex = 2; // Default to Home (Middle)
+
+  final List<Widget> _pages = [
+    const ExpenseTrackingPage(), // Index 0
+    const ChatModuleList(),      // Index 1
+    const HomePage(),            // Index 2
+    const PetProfilePage(),           // Index 3
+    const ProfilePage(),         // Index 4 -> 从 user_profile.dart 引入
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: _pages,
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: (index) => setState(() => _selectedIndex = index),
+        type: BottomNavigationBarType.fixed,
+        selectedItemColor: Colors.teal,
+        unselectedItemColor: Colors.grey,
+        showUnselectedLabels: true,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.account_balance_wallet), label: "Expense"),
+          BottomNavigationBarItem(icon: Icon(Icons.chat), label: "Chat"),
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
+          BottomNavigationBarItem(icon: Icon(Icons.forum), label: "Forum"),
+          BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
+        ],
+      ),
+    );
+  }
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -44,52 +94,106 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  int _currentIndex = 2; // 默认选中中间 Home icon
+  String _userRole = 'User';
 
-  final List<Widget> _pages = [
-    const Center(child: Text('Module 1')),
-    const Center(child: Text('Module 2 Placeholder')),
-    const Center(child: Text('Home Page')), // 中间 Home
-    const Center(child: PetProfilePage()),
-    const Center(child: ProfilePage()),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _fetchUserRole();
+  }
+
+  Future<void> _fetchUserRole() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user != null) {
+      try {
+        final data = await Supabase.instance.client
+            .from('users')
+            .select('role')
+            .eq('userID', user.id)
+            .single();
+        if (mounted) setState(() => _userRole = data['role'] ?? 'User');
+      } catch (e) {
+        debugPrint("Error fetching role: $e");
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_currentIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: Colors.deepPurple,
-        unselectedItemColor: Colors.grey,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.dashboard),
-            label: 'Tab 1',
+      appBar: AppBar(
+        title: const Text("PetCare Hub", style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
+      body: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: const BoxDecoration(
+              color: Colors.teal,
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(30),
+                bottomRight: Radius.circular(30),
+              ),
+            ),
+            child: Row(
+              children: [
+                const CircleAvatar(radius: 30, backgroundColor: Colors.white, child: Icon(Icons.pets, color: Colors.teal, size: 30)),
+                const SizedBox(width: 15),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("Welcome back!", style: TextStyle(color: Colors.white70, fontSize: 14)),
+                    Text("Role: $_userRole", style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ],
+            ),
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.notifications),
-            label: 'Tab 2',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home, size: 35),
-            label: 'Home',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.pets),
-            label: 'Pet Profile',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person),
-            label: 'User Profile',
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: ListView(
+                children: [
+                  const Text("Quick Actions", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  _buildMenuCard(context, "Community Forum", "Join discussions with other owners", Icons.forum, Colors.deepPurple, const ForumPage()),
+                  _buildMenuCard(context, "Lost & Found", "Report and find missing pets", Icons.location_on, Colors.orange, const LostAndFoundPage()),
+                  _buildMenuCard(context, "Pet Adoption", "Find a forever home for pets", Icons.pets, Colors.green, const PetAdoptionPage()),
+                  _buildMenuCard(context, "Pet Education", "Learn how to care for your pet", Icons.menu_book, Colors.blue, const EducationPage()),
+                  _buildMenuCard(context, "Expense Tracking", "Manage your pet expenses", Icons.account_balance_wallet, Colors.purple, const ExpenseTrackingPage()),
+                  if (_userRole == 'Admin') ...[
+                    const Divider(height: 30),
+                    const Text("Admin Tools", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
+                    const SizedBox(height: 10),
+                    _buildMenuCard(context, "Approve Posts", "Review pending pet adoption posts", Icons.fact_check, Colors.teal, const AdminApprovalPage()),
+                  ]
+                ],
+              ),
+            ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMenuCard(BuildContext context, String title, String subtitle, IconData icon, Color color, Widget destination) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(0.1),
+          child: Icon(icon, color: color),
+        ),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => destination)),
       ),
     );
   }

@@ -25,6 +25,14 @@ class _SchedulePageState extends State<SchedulePage> {
     _loadSchedules();
   }
 
+  // 获取 pet 名字
+  String getPetName(String petID) {
+    final pet = widget.pets.firstWhere(
+          (p) => p['petID'].toString() == petID.toString(),
+      orElse: () => {'petName': '-'},
+    );
+    return pet['petName'] ?? '-';
+  }
 
   Future<void> _loadSchedules() async {
     if (widget.petIds.isEmpty) {
@@ -35,7 +43,6 @@ class _SchedulePageState extends State<SchedulePage> {
     setState(() => _isLoading = true);
 
     try {
-
       final scheduleResponse = await supabase
           .from('schedule')
           .select()
@@ -53,7 +60,6 @@ class _SchedulePageState extends State<SchedulePage> {
     }
   }
 
-
   void _goToDetail(Map<String, dynamic> schedule) {
     Navigator.push(
       context,
@@ -62,7 +68,6 @@ class _SchedulePageState extends State<SchedulePage> {
       ),
     ).then((_) => _loadSchedules());
   }
-
 
   void _goToCreate() async {
     await Navigator.push(
@@ -77,15 +82,15 @@ class _SchedulePageState extends State<SchedulePage> {
     _loadSchedules();
   }
 
-
   Widget _buildScheduleCard(Map<String, dynamic> s) {
+    final petName = getPetName(s['petID']);
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: ListTile(
         leading: const Icon(Icons.event),
         title: Text(s['title'] ?? '-'),
         subtitle: Text(
-          'Pet: ${s['petName'] ?? '-'}\n'
+          'Pet: $petName\n'
               'Date: ${s['date']} | ${s['startTime'] ?? '-'} - ${s['endTime'] ?? '-'}\n'
               'Type: ${s['scheduleType'] ?? '-'}',
         ),
