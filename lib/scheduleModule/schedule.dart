@@ -16,6 +16,8 @@ class SchedulePage extends StatefulWidget {
 }
 
 class _SchedulePageState extends State<SchedulePage> {
+  final Color themeColor = Colors.teal;
+
   List<Map<String, dynamic>> _schedules = [];
   bool _isLoading = true;
 
@@ -25,7 +27,7 @@ class _SchedulePageState extends State<SchedulePage> {
     _loadSchedules();
   }
 
-  // 获取 pet 名字
+  // 根据 petID 找名字
   String getPetName(String petID) {
     final pet = widget.pets.firstWhere(
           (p) => p['petID'].toString() == petID.toString(),
@@ -41,19 +43,18 @@ class _SchedulePageState extends State<SchedulePage> {
     }
 
     setState(() => _isLoading = true);
-
     try {
       final scheduleResponse = await supabase
           .from('schedule')
           .select()
-          .filter('petID','in', widget.petIds)
+          .filter('petID', 'in', widget.petIds)
           .order('date', ascending: true);
 
       setState(() {
         _schedules = List<Map<String, dynamic>>.from(scheduleResponse);
       });
     } catch (e) {
-      print('Error loading schedules: $e');
+      debugPrint('Error loading schedules: $e');
       setState(() => _schedules = []);
     } finally {
       setState(() => _isLoading = false);
@@ -63,9 +64,7 @@ class _SchedulePageState extends State<SchedulePage> {
   void _goToDetail(Map<String, dynamic> schedule) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => ScheduleDetailPage(schedule: schedule),
-      ),
+      MaterialPageRoute(builder: (_) => ScheduleDetailPage(schedule: schedule)),
     ).then((_) => _loadSchedules());
   }
 
@@ -73,10 +72,7 @@ class _SchedulePageState extends State<SchedulePage> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => CreateSchedulePage(
-          pets: widget.pets,
-          petIds: widget.petIds,
-        ),
+        builder: (_) => CreateSchedulePage(pets: widget.pets, petIds: widget.petIds),
       ),
     );
     _loadSchedules();
@@ -84,18 +80,47 @@ class _SchedulePageState extends State<SchedulePage> {
 
   Widget _buildScheduleCard(Map<String, dynamic> s) {
     final petName = getPetName(s['petID']);
+
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       child: ListTile(
-        leading: const Icon(Icons.event),
-        title: Text(s['title'] ?? '-'),
-        subtitle: Text(
-          'Pet: $petName\n'
-              'Date: ${s['date']} | ${s['startTime'] ?? '-'} - ${s['endTime'] ?? '-'}\n'
-              'Type: ${s['scheduleType'] ?? '-'}',
+        contentPadding: const EdgeInsets.all(12),
+        leading: CircleAvatar(
+          backgroundColor: themeColor.withOpacity(0.1),
+          child: Icon(Icons.calendar_today, color: themeColor),
         ),
-        isThreeLine: true,
-        trailing: const Icon(Icons.arrow_forward_ios),
+        title: Text(
+          s['title'] ?? '-',
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.pets, size: 14, color: Colors.grey),
+                  const SizedBox(width: 4),
+                  Flexible(child: Text('Pet: $petName')),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Icon(Icons.access_time, size: 14, color: Colors.grey),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text('${s['date']} | ${s['startTime']?.substring(0,5)} - ${s['endTime']?.substring(0,5)}'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
         onTap: () => _goToDetail(s),
       ),
     );
@@ -104,12 +129,29 @@ class _SchedulePageState extends State<SchedulePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Schedules'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('Pet Schedules'),
+        centerTitle: true,
+        backgroundColor: themeColor,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(child: CircularProgressIndicator(color: themeColor))
           : _schedules.isEmpty
-          ? const Center(child: Text('No schedules found.'))
+          ? Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.event_note, size: 80, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            const Text('No schedules found. Plan some activities!',
+                style: TextStyle(color: Colors.grey)),
+          ],
+        ),
+      )
           : ListView.builder(
+        padding: const EdgeInsets.only(top: 10, bottom: 80),
         itemCount: _schedules.length,
         itemBuilder: (context, index) {
           return _buildScheduleCard(_schedules[index]);
@@ -117,7 +159,8 @@ class _SchedulePageState extends State<SchedulePage> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _goToCreate,
-        child: const Icon(Icons.add),
+        backgroundColor: themeColor,
+        child: const Icon(Icons.add, color: Colors.white, size: 30),
       ),
     );
   }
