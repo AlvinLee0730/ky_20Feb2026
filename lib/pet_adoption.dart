@@ -51,7 +51,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
     }
   }
 
-  // Helper to reset filters
   void _resetFilters() {
     setState(() {
       _ageFilter = 'All';
@@ -109,6 +108,7 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
       };
 
       if (editId != null) {
+        if (_userRole != 'Admin') postData['isApproved'] = false;
         await _supabase.from('adoption_posts').update(postData).eq('adoptionPostID', editId);
       } else {
         postData['adoptionPostID'] = await _generateAdoptionID();
@@ -252,6 +252,8 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
   }
 
   Widget _buildGridItem(Map<String, dynamic> post, String? currentUserId) {
+    bool isPending = post['isApproved'] == false;
+
     return Card(
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -260,8 +262,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
           try {
             final Map<String, dynamic> postData = Map<String, dynamic>.from(post);
             final userData = await _supabase.from('users').select('userName').eq('userID', post['userID']).single();
-
-            // Store Name and ID for the Detail Page
             postData['authorName'] = userData['userName'];
             postData['authorID'] = post['userID'];
 
@@ -279,8 +279,29 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
               child: Stack(
                 children: [
                   post['photoURL'] != null
-                      ? Image.network(post['photoURL'], width: double.infinity, fit: BoxFit.cover)
+                      ? Image.network(post['photoURL'], width: double.infinity, height: double.infinity, fit: BoxFit.cover)
                       : Container(color: Colors.grey[300], child: const Center(child: Icon(Icons.pets))),
+
+                  // Pending Status Hint Overlay
+                  if (isPending)
+                    Container(
+                      width: double.infinity,
+                      height: double.infinity,
+                      color: Colors.black45,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.9),
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: const Text(
+                            "PENDING APPROVAL",
+                            style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -384,7 +405,6 @@ class PetDetailPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final dateStr = post['uploadDate'] ?? DateTime.now().toString();
     final formattedDate = DateFormat('dd MMM yyyy').format(DateTime.parse(dateStr));
-
     final authorName = post['authorName'] ?? "Unknown User";
     final authorID = post['authorID'];
     final currentUserID = Supabase.instance.client.auth.currentUser?.id;
@@ -410,32 +430,12 @@ class PetDetailPage extends StatelessWidget {
 
                   GestureDetector(
                     onTap: () {
-                      if (authorID == null) return;
-                      if (authorID == currentUserID) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text("This is your own post!")),
-                        );
-                        return;
-                      }
-
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ChatPage(
-                            targetUserID: authorID,
-                            title: authorName,
-                          ),
-                        ),
-                      );
+                      if (authorID == null || authorID == currentUserID) return;
+                      Navigator.push(context, MaterialPageRoute(builder: (context) => ChatPage(targetUserID: authorID, title: authorName)));
                     },
                     child: Text(
                         "Posted by: $authorName",
-                        style: const TextStyle(
-                          fontSize: 16,
-                          color: Colors.teal,
-                          fontWeight: FontWeight.bold,
-                          decoration: TextDecoration.underline,
-                        )
+                        style: const TextStyle(fontSize: 16, color: Colors.teal, fontWeight: FontWeight.bold, decoration: TextDecoration.underline)
                     ),
                   ),
 

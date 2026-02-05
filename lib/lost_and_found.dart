@@ -4,6 +4,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 
+// Your existing local files
+import 'chat.dart';
+
 class LostAndFoundPage extends StatefulWidget {
   const LostAndFoundPage({super.key});
 
@@ -14,211 +17,321 @@ class LostAndFoundPage extends StatefulWidget {
 class _LostAndFoundPageState extends State<LostAndFoundPage> {
   final _supabase = Supabase.instance.client;
 
-  // Controllers
-  final _nameController = TextEditingController();
-  final _breedController = TextEditingController();
-  final _locationController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _contactInfoController = TextEditingController();
+  // Hub & Pagination State
+  String _selectedTab = 'Lost';
+  int _currentPage = 0;
+  final int _itemsPerPage = 6;
+
+  // Search State
   final _searchController = TextEditingController();
-
-  // Sorting and Filter States
-  bool _isAscending = false;
+  bool _isSearching = false;
   String _searchQuery = "";
-  String _filterType = 'All';
-  String _filterBreed = 'All';
-  String _filterLocation = 'All';
-
-  // Dynamic Filter Lists
-  List<String> _availableBreeds = ['All'];
-  List<String> _availableLocations = ['All'];
 
   // Form State
-  String _selectedType = 'Lost';
-  String _selectedGender = 'Male';
-  String _contactMethod = 'Phone';
-  DateTime _selectedDate = DateTime.now();
+  final _locationController = TextEditingController();
+  final _contactController = TextEditingController();
+  final _remarkController = TextEditingController();
   File? _imageFile;
+  String _selectedGender = 'Male';
   bool _isSaving = false;
 
   @override
-  void initState() {
-    super.initState();
-    _loadFilters();
+  void dispose() {
+    _searchController.dispose();
+    _locationController.dispose();
+    _contactController.dispose();
+    _remarkController.dispose();
+    super.dispose();
   }
 
-  // --- LOGIC: LOAD DYNAMIC FILTER OPTIONS ---
-  Future<void> _loadFilters() async {
-    try {
-      final response = await _supabase.from('lost_pets').select('breed, location');
-      final Set<String> breeds = {'All'};
-      final Set<String> locations = {'All'};
-
-      for (var row in response) {
-        if (row['breed'] != null && row['breed'].toString().isNotEmpty) {
-          breeds.add(row['breed']);
-        }
-        if (row['location'] != null && row['location'].toString().isNotEmpty) {
-          locations.add(row['location']);
-        }
-      }
-
-      setState(() {
-        _availableBreeds = breeds.toList();
-        _availableLocations = locations.toList();
-      });
-    } catch (e) {
-      debugPrint("Filter load error: $e");
+  Future<void> _submitPost() async {
+    if (_locationController.text.isEmpty || _imageFile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please add an image and location")));
+      return;
     }
-  }
-
-  void _clearAllFilters() {
-    setState(() {
-      _filterType = 'All';
-      _filterBreed = 'All';
-      _filterLocation = 'All';
-      _searchQuery = "";
-      _searchController.clear();
-    });
-  }
-
-  Stream<List<Map<String, dynamic>>> get _petStream => _supabase
-      .from('lost_pets')
-      .stream(primaryKey: ['id'])
-      .order('created_at', ascending: _isAscending);
-
-  // --- LOGIC: DELETE ---
-  Future<void> _deletePost(int id) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Delete Post?"),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Delete", style: TextStyle(color: Colors.red))),
-        ],
-      ),
-    );
-    if (confirm == true) {
-      await _supabase.from('lost_pets').delete().eq('id', id);
-      _loadFilters();
-    }
-  }
-
-  // --- LOGIC: SAVE ---
-  Future<void> _savePost({int? existingId, String? existingImageUrl}) async {
-    if (_nameController.text.trim().isEmpty || _locationController.text.trim().isEmpty) return;
-
     setState(() => _isSaving = true);
     try {
-      String? imageUrl = existingImageUrl;
-      if (_imageFile != null) {
-        final fileName = 'pet_${DateTime.now().millisecondsSinceEpoch}.jpg';
-        await _supabase.storage.from('pet_images').upload(fileName, _imageFile!);
-        imageUrl = _supabase.storage.from('pet_images').getPublicUrl(fileName);
-      }
+      final String table = _selectedTab == 'Lost' ? 'lost_post' : 'found_post';
+      final String idKey = _selectedTab == 'Lost' ? 'lostPostID' : 'foundPostID';
 
-      final data = {
-        'type': _selectedType,
-        'name': _nameController.text.trim(),
-        'location': _locationController.text.trim(),
-        'description': _descriptionController.text.trim(),
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}.png';
+      await _supabase.storage.from('lost_found_photos').upload(fileName, _imageFile!);
+      final imageUrl = _supabase.storage.from('lost_found_photos').getPublicUrl(fileName);
+
+      final prefix = _selectedTab == 'Lost' ? 'LPP' : 'FPP';
+      final newID = "$prefix${DateTime.now().millisecondsSinceEpoch.toString().substring(8)}";
+
+      await _supabase.from(table).insert({
+        idKey: newID,
+        'userID': _supabase.auth.currentUser!.id,
         'gender': _selectedGender,
-        'breed': _breedController.text.trim(),
-        'date_lost': DateFormat('yyyy-MM-dd').format(_selectedDate),
-        'contact_method': _contactMethod,
-        'contact_info': _contactInfoController.text.trim(),
-        'image_url': imageUrl,
-      };
+        'location': _locationController.text.trim(),
+        _selectedTab == 'Lost' ? 'dateLost' : 'dateFound': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        'photoURL': imageUrl,
+        'contactInfo': _contactController.text.trim(),
+        'uploadDate': DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        'remark': _remarkController.text.trim(),
+        'isApproved': false,
+      });
 
-      if (existingId == null) {
-        await _supabase.from('lost_pets').insert(data);
-      } else {
-        await _supabase.from('lost_pets').update(data).eq('id', existingId);
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Submitted! Waiting for Admin approval.")));
       }
-
-      _loadFilters();
-      if (mounted) Navigator.pop(context);
+      _clearForm();
+    } catch (e) {
+      debugPrint("Error: $e");
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
-  // --- FORM UI ---
-  void _showPostForm({Map<String, dynamic>? post}) {
-    if (post != null) {
-      _nameController.text = post['name'] ?? '';
-      _locationController.text = post['location'] ?? '';
-      _descriptionController.text = post['description'] ?? '';
-      _breedController.text = post['breed'] ?? '';
-      _contactInfoController.text = post['contact_info'] ?? '';
-      _selectedType = post['type'] ?? 'Lost';
-      _selectedGender = post['gender'] ?? 'Male';
-      _contactMethod = post['contact_method'] ?? 'Phone';
-      _selectedDate = DateTime.parse(post['date_lost'] ?? DateTime.now().toIso8601String());
-    } else {
-      _nameController.clear(); _locationController.clear(); _descriptionController.clear();
-      _breedController.clear(); _contactInfoController.clear();
-      _imageFile = null; _selectedDate = DateTime.now();
-    }
+  void _clearForm() {
+    _locationController.clear();
+    _contactController.clear();
+    _remarkController.clear();
+    _imageFile = null;
+    _selectedGender = 'Male';
+  }
 
+  @override
+  Widget build(BuildContext context) {
+    final table = _selectedTab == 'Lost' ? 'lost_post' : 'found_post';
+    final idKey = _selectedTab == 'Lost' ? 'lostPostID' : 'foundPostID';
+    final currentUid = _supabase.auth.currentUser?.id;
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: _isSearching
+            ? TextField(
+          controller: _searchController,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: "Search area...",
+            border: InputBorder.none,
+          ),
+          onChanged: (val) {
+            setState(() {
+              _searchQuery = val.toLowerCase();
+              _currentPage = 0;
+            });
+          },
+        )
+            : const Text(
+            "Lost and Found Hub",
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22)
+        ),
+        centerTitle: true,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: Icon(_isSearching ? Icons.close : Icons.search),
+            onPressed: () {
+              setState(() {
+                _isSearching = !_isSearching;
+                if (!_isSearching) {
+                  _searchController.clear();
+                  _searchQuery = "";
+                }
+              });
+            },
+          )
+        ],
+      ),
+      body: Column(
+        children: [
+          _buildHubSelector(),
+          Expanded(
+            child: StreamBuilder<List<Map<String, dynamic>>>(
+              stream: _supabase.from(table).stream(primaryKey: [idKey]).order('uploadDate', ascending: false),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+
+                // FILTER: Visibility (Approved or Owner) AND Search Query (Area)
+                var data = snapshot.data!.where((post) {
+                  final bool isVisible = (post['isApproved'] == true) || (post['userID'] == currentUid);
+                  final bool matchesSearch = post['location'].toString().toLowerCase().contains(_searchQuery);
+                  return isVisible && matchesSearch;
+                }).toList();
+
+                if (data.isEmpty) return const Center(child: Text("No reports found."));
+
+                int totalPages = (data.length / _itemsPerPage).ceil();
+                if (totalPages == 0) totalPages = 1;
+                int start = _currentPage * _itemsPerPage;
+                int end = (start + _itemsPerPage) > data.length ? data.length : (start + _itemsPerPage);
+                final paged = data.sublist(start, end);
+
+                return Column(
+                  children: [
+                    Expanded(
+                      child: GridView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 12, mainAxisSpacing: 12),
+                        itemCount: paged.length,
+                        itemBuilder: (ctx, i) => _buildPetCard(paged[i]),
+                      ),
+                    ),
+                    _buildPagination(totalPages),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 60),
+        child: FloatingActionButton(
+          onPressed: _showAddForm,
+          backgroundColor: Colors.teal,
+          child: const Icon(Icons.add, color: Colors.white, size: 30),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHubSelector() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      child: Container(
+        height: 65,
+        padding: const EdgeInsets.all(5),
+        decoration: BoxDecoration(color: const Color(0xFFF1F1F1), borderRadius: BorderRadius.circular(35)),
+        child: Row(
+          children: [
+            _buildBigTab("Lost", Colors.redAccent),
+            _buildBigTab("Found", Colors.teal),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBigTab(String type, Color activeColor) {
+    bool isSel = _selectedTab == type;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() { _selectedTab = type; _currentPage = 0; }),
+        child: Container(
+          decoration: BoxDecoration(color: isSel ? activeColor : Colors.transparent, borderRadius: BorderRadius.circular(30)),
+          child: Center(
+            child: Text("${type.toUpperCase()} HUB",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: isSel ? Colors.white : Colors.grey[500])),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPetCard(Map<String, dynamic> post) {
+    final bool isPending = post['isApproved'] == false;
+
+    return Card(
+      color: const Color(0xFFF8F7FF),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (ctx) => PostDetailPage(post: post, type: _selectedTab))),
+        child: Stack(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                    child: Image.network(
+                      post['photoURL'] ?? '',
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      color: isPending ? Colors.black.withOpacity(0.4) : null,
+                      colorBlendMode: isPending ? BlendMode.darken : null,
+                    )
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(10.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(post['location'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1),
+                      Text(post['gender'] ?? 'Male', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (isPending)
+              Positioned(
+                top: 10,
+                left: 10,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(color: Colors.orange.withOpacity(0.9), borderRadius: BorderRadius.circular(20)),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.access_time, color: Colors.white, size: 12),
+                      SizedBox(width: 4),
+                      Text("Pending", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPagination(int total) {
+    return Container(
+      padding: const EdgeInsets.only(top: 10, bottom: 25),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          IconButton(icon: const Icon(Icons.arrow_back_ios_new, size: 18), onPressed: _currentPage > 0 ? () => setState(() => _currentPage--) : null),
+          Text("Page ${_currentPage + 1} of $total"),
+          IconButton(icon: const Icon(Icons.arrow_forward_ios, size: 18), onPressed: _currentPage < total - 1 ? () => setState(() => _currentPage++) : null),
+        ],
+      ),
+    );
+  }
+
+  void _showAddForm() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, top: 20, left: 20, right: 20),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(post == null ? "Report a Pet" : "Edit Report", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                const SizedBox(height: 15),
-                InkWell(
+                const Text("Report Pet", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 20),
+                GestureDetector(
                   onTap: () async {
-                    final pickedFile = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 50);
-                    if (pickedFile != null) setModalState(() => _imageFile = File(pickedFile.path));
+                    final p = await ImagePicker().pickImage(source: ImageSource.gallery);
+                    if (p != null) setModalState(() => _imageFile = File(p.path));
                   },
                   child: Container(
-                    height: 120, width: double.infinity,
-                    decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.grey.shade300)),
-                    child: _imageFile != null
-                        ? ClipRRect(borderRadius: BorderRadius.circular(15), child: Image.file(_imageFile!, fit: BoxFit.cover))
-                        : (post?['image_url'] != null ? ClipRRect(borderRadius: BorderRadius.circular(15), child: Image.network(post!['image_url'], fit: BoxFit.cover)) : const Icon(Icons.add_a_photo, color: Colors.orange)),
+                    height: 140, width: double.infinity,
+                    decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(20)),
+                    child: _imageFile != null ? ClipRRect(borderRadius: BorderRadius.circular(20), child: Image.file(_imageFile!, fit: BoxFit.cover)) : const Icon(Icons.add_a_photo, color: Colors.teal),
                   ),
                 ),
-                DropdownButtonFormField(
-                  value: _selectedType,
-                  decoration: const InputDecoration(labelText: "Report Type"),
-                  items: ['Lost', 'Found'].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-                  onChanged: (val) => setModalState(() => _selectedType = val!),
-                ),
-                TextField(controller: _nameController, decoration: const InputDecoration(labelText: "Pet Name")),
-                TextField(controller: _breedController, decoration: const InputDecoration(labelText: "Breed")),
-                DropdownButtonFormField(
-                  value: _selectedGender,
-                  decoration: const InputDecoration(labelText: "Gender"),
-                  items: ['Male', 'Female', 'Unknown'].map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
-                  onChanged: (val) => setModalState(() => _selectedGender = val!),
-                ),
                 TextField(controller: _locationController, decoration: const InputDecoration(labelText: "Location")),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text("Date: ${DateFormat('yyyy-MM-dd').format(_selectedDate)}"),
-                  trailing: const Icon(Icons.calendar_month),
-                  onTap: () async {
-                    final picked = await showDatePicker(context: context, initialDate: _selectedDate, firstDate: DateTime(2022), lastDate: DateTime.now());
-                    if (picked != null) setModalState(() => _selectedDate = picked);
-                  },
-                ),
-                TextField(controller: _contactInfoController, decoration: const InputDecoration(labelText: "Contact Detail (Phone/Email)")),
-                TextField(controller: _descriptionController, maxLines: 2, decoration: const InputDecoration(labelText: "Description")),
+                TextField(controller: _contactController, decoration: const InputDecoration(labelText: "Contact Info")),
+                TextField(controller: _remarkController, decoration: const InputDecoration(labelText: "Remark")),
                 const SizedBox(height: 20),
                 _isSaving ? const CircularProgressIndicator() : ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white, minimumSize: const Size(double.infinity, 45)),
-                  onPressed: () => _savePost(existingId: post?['id'], existingImageUrl: post?['image_url']),
-                  child: Text(post == null ? "POST REPORT" : "UPDATE REPORT"),
+                  onPressed: _submitPost,
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, minimumSize: const Size(double.infinity, 50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                  child: const Text("SUBMIT FOR APPROVAL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 30),
               ],
@@ -228,204 +341,124 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
       ),
     );
   }
+}
+
+class PostDetailPage extends StatefulWidget {
+  final Map<String, dynamic> post;
+  final String type;
+  const PostDetailPage({super.key, required this.post, required this.type});
+
+  @override
+  State<PostDetailPage> createState() => _PostDetailPageState();
+}
+
+class _PostDetailPageState extends State<PostDetailPage> {
+  final _supabase = Supabase.instance.client;
+  bool _isAdmin = false;
+  String _authorName = "Reporter";
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final user = _supabase.auth.currentUser;
+    if (user == null) return;
+    try {
+      final roleRes = await _supabase.from('users').select('role').eq('userID', user.id).maybeSingle();
+      if (mounted && roleRes != null) setState(() => _isAdmin = roleRes['role'] == 'Admin');
+
+      final userRes = await _supabase.from('users').select('userName').eq('userID', widget.post['userID']).single();
+      if (mounted) setState(() => _authorName = userRes['userName']);
+    } catch (e) {
+      debugPrint("Data load error: $e");
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    bool hasFilters = _filterType != 'All' || _filterBreed != 'All' || _filterLocation != 'All' || _searchQuery.isNotEmpty;
+    final bool isOwner = _supabase.auth.currentUser?.id == widget.post['userID'];
+    final bool canModify = isOwner || _isAdmin;
+    final bool isPending = widget.post['isApproved'] == false;
+    final String dateStr = widget.post['uploadDate'] ?? DateTime.now().toString();
+    final formattedDate = DateFormat('dd MMM yyyy').format(DateTime.parse(dateStr));
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Lost & Found"),
+        title: Text(widget.post['location']),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
         actions: [
-          if (hasFilters) IconButton(icon: const Icon(Icons.refresh), onPressed: _clearAllFilters),
-          IconButton(
-            icon: Icon(_isAscending ? Icons.arrow_upward : Icons.arrow_downward),
-            onPressed: () => setState(() => _isAscending = !_isAscending),
-          ),
+          if (canModify) ...[
+            IconButton(icon: const Icon(Icons.edit, color: Colors.teal), onPressed: () => _showEditForm(context)),
+            IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: _confirmDelete),
+          ]
         ],
       ),
-      body: Column(
-        children: [
-          // 1. SEARCH BAR
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: "Search name...",
-                prefixIcon: const Icon(Icons.search),
-                filled: true, fillColor: Colors.grey[100],
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
-              ),
-              onChanged: (val) => setState(() => _searchQuery = val.toLowerCase()),
-            ),
-          ),
-
-          // 2. RESTORED FILTERS ROW
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(child: _buildDropdownFilter("Type", _filterType, ['All', 'Lost', 'Found'], (val) => setState(() => _filterType = val!))),
-                const SizedBox(width: 8),
-                Expanded(child: _buildDropdownFilter("Breed", _filterBreed, _availableBreeds, (val) => setState(() => _filterBreed = val!))),
-                const SizedBox(width: 8),
-                Expanded(child: _buildDropdownFilter("Loc", _filterLocation, _availableLocations, (val) => setState(() => _filterLocation = val!))),
-              ],
-            ),
-          ),
-          const Divider(),
-
-          // 3. GRID VIEW
-          Expanded(
-            child: StreamBuilder<List<Map<String, dynamic>>>(
-              stream: _petStream,
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-
-                final filtered = snapshot.data!.where((p) {
-                  final name = (p['name'] ?? '').toString().toLowerCase();
-                  bool matchesSearch = name.contains(_searchQuery);
-                  bool matchesType = _filterType == 'All' || p['type'] == _filterType;
-                  bool matchesBreed = _filterBreed == 'All' || p['breed'] == _filterBreed;
-                  bool matchesLoc = _filterLocation == 'All' || p['location'] == _filterLocation;
-                  return matchesSearch && matchesType && matchesBreed && matchesLoc;
-                }).toList();
-
-                return GridView.builder(
-                  padding: const EdgeInsets.all(12),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2, crossAxisSpacing: 10, mainAxisSpacing: 10, childAspectRatio: 0.75,
-                  ),
-                  itemCount: filtered.length,
-                  itemBuilder: (context, index) {
-                    final post = filtered[index];
-                    return Card(
-                      clipBehavior: Clip.antiAlias,
-                      child: InkWell(
-                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => LostPetDetail(post: post))),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Stack(
-                                children: [
-                                  post['image_url'] != null
-                                      ? Image.network(post['image_url'], width: double.infinity, height: double.infinity, fit: BoxFit.cover)
-                                      : Container(color: Colors.orange[50], width: double.infinity, child: const Icon(Icons.pets, size: 40)),
-                                  Positioned(
-                                    top: 5, right: 5,
-                                    child: Row(
-                                      children: [
-                                        _smallActionBtn(Icons.edit, Colors.blue, () => _showPostForm(post: post)),
-                                        const SizedBox(width: 4),
-                                        _smallActionBtn(Icons.delete, Colors.red, () => _deletePost(post['id'])),
-                                      ],
-                                    ),
-                                  ),
-                                  Positioned(
-                                    bottom: 5, left: 5,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(color: post['type'] == 'Lost' ? Colors.red : Colors.green, borderRadius: BorderRadius.circular(4)),
-                                      child: Text(post['type'] ?? 'Lost', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                                    ),
-                                  )
-                                ],
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(post['name'] ?? 'Unknown', style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 1),
-                                  Text(post['location'] ?? 'Unknown location', style: const TextStyle(fontSize: 12, color: Colors.grey), maxLines: 1),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showPostForm(),
-        backgroundColor: Colors.orange,
-        child: const Icon(Icons.add, color: Colors.white),
-      ),
-    );
-  }
-
-  Widget _smallActionBtn(IconData icon, Color color, VoidCallback onPressed) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        height: 28, width: 28,
-        decoration: BoxDecoration(color: Colors.white.withOpacity(0.9), shape: BoxShape.circle),
-        child: Icon(icon, size: 16, color: color),
-      ),
-    );
-  }
-
-  Widget _buildDropdownFilter(String label, String value, List<String> items, ValueChanged<String?> onChanged) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey)),
-        DropdownButton<String>(
-          value: items.contains(value) ? value : 'All',
-          isExpanded: true,
-          underline: Container(height: 1, color: Colors.orange),
-          onChanged: onChanged,
-          items: items.map((i) => DropdownMenuItem(value: i, child: Text(i, style: const TextStyle(fontSize: 12)))).toList(),
-        ),
-      ],
-    );
-  }
-}
-
-// --- DETAIL PAGE ---
-class LostPetDetail extends StatelessWidget {
-  final Map<String, dynamic> post;
-  const LostPetDetail({super.key, required this.post});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(post['name'] ?? "Details")),
       body: SingleChildScrollView(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (post['image_url'] != null) Image.network(post['image_url'], width: double.infinity, height: 300, fit: BoxFit.cover),
+            Stack(
+              children: [
+                Image.network(widget.post['photoURL'] ?? '', height: 300, width: double.infinity, fit: BoxFit.cover),
+                if (isPending)
+                  Container(
+                    height: 300, width: double.infinity, color: Colors.black26,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                        decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(20)),
+                        child: const Text("PENDING APPROVAL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
             Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(post['name'] ?? "Unknown Pet", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                      Chip(label: Text(post['type'] ?? 'Lost'), backgroundColor: post['type'] == 'Lost' ? Colors.red[100] : Colors.green[100]),
-                    ],
+                  Text(widget.post['location'], style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                    onTap: () {
+                      if (isOwner) return;
+                      Navigator.push(context, MaterialPageRoute(
+                          builder: (ctx) => ChatPage(targetUserID: widget.post['userID'], title: _authorName)
+                      ));
+                    },
+                    child: Text(
+                        "Posted by: ${isOwner ? "You" : _authorName}",
+                        style: const TextStyle(fontSize: 16, color: Colors.teal, fontWeight: FontWeight.bold, decoration: TextDecoration.underline)
+                    ),
                   ),
-                  const Divider(),
-                  _detailRow(Icons.pets, "Breed", post['breed']),
-                  _detailRow(Icons.transgender, "Gender", post['gender']),
-                  _detailRow(Icons.location_on, "Location", post['location']),
-                  _detailRow(Icons.calendar_today, "Date", post['date_lost']),
-                  _detailRow(Icons.contact_phone, "Contact", post['contact_info']),
+                  Text("Posted on: $formattedDate", style: const TextStyle(color: Colors.grey)),
+                  const Divider(height: 30),
+                  _rowItem(Icons.location_on, "Area", widget.post['location']),
+                  _rowItem(Icons.transgender, "Gender", widget.post['gender'] ?? 'Male'),
+                  _rowItem(Icons.phone, "Contact", widget.post['contactInfo']),
                   const SizedBox(height: 20),
-                  const Text("Description", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 8),
-                  Text(post['description'] ?? "No additional description."),
+                  const Text("Remarks:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 5),
+                  Text(widget.post['remark'] ?? "No remarks.", style: const TextStyle(fontSize: 16)),
+                  const SizedBox(height: 40),
+                  if (!isOwner && !isPending)
+                    ElevatedButton.icon(
+                      onPressed: () => Navigator.push(context, MaterialPageRoute(
+                          builder: (ctx) => ChatPage(targetUserID: widget.post['userID'], title: _authorName)
+                      )),
+                      icon: const Icon(Icons.message),
+                      label: const Text("Message Reporter"),
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.teal, foregroundColor: Colors.white,
+                          minimumSize: const Size(double.infinity, 55), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -435,17 +468,65 @@ class LostPetDetail extends StatelessWidget {
     );
   }
 
-  Widget _detailRow(IconData icon, String label, String? value) {
+  Widget _rowItem(IconData icon, String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         children: [
-          Icon(icon, size: 20, color: Colors.orange),
+          Icon(icon, color: Colors.teal),
           const SizedBox(width: 10),
           Text("$label: ", style: const TextStyle(fontWeight: FontWeight.bold)),
-          Text(value ?? "N/A"),
+          Text(value),
         ],
       ),
     );
+  }
+
+  void _confirmDelete() {
+    showDialog(context: context, builder: (ctx) => AlertDialog(
+      title: const Text("Delete Post"),
+      content: const Text("Are you sure? This cannot be undone."),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+        TextButton(onPressed: () async {
+          final table = widget.type == 'Lost' ? 'lost_post' : 'found_post';
+          final idKey = widget.type == 'Lost' ? 'lostPostID' : 'foundPostID';
+          await _supabase.from(table).delete().eq(idKey, widget.post[idKey]);
+          if (mounted) { Navigator.pop(ctx); Navigator.pop(context); }
+        }, child: const Text("Delete", style: TextStyle(color: Colors.red))),
+      ],
+    ));
+  }
+
+  void _showEditForm(BuildContext context) {
+    final loc = TextEditingController(text: widget.post['location']);
+    final rem = TextEditingController(text: widget.post['remark']);
+    final con = TextEditingController(text: widget.post['contactInfo']);
+    String gen = widget.post['gender'] ?? 'Male';
+
+    showModalBottomSheet(context: context, isScrollControlled: true, builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setMState) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text("Edit Report", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          DropdownButtonFormField<String>(
+              value: gen,
+              items: ['Male', 'Female'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+              onChanged: (v) => setMState(() => gen = v!)
+          ),
+          TextField(controller: loc, decoration: const InputDecoration(labelText: "Location")),
+          TextField(controller: con, decoration: const InputDecoration(labelText: "Contact")),
+          TextField(controller: rem, decoration: const InputDecoration(labelText: "Remark")),
+          const SizedBox(height: 20),
+          ElevatedButton(onPressed: () async {
+            final table = widget.type == 'Lost' ? 'lost_post' : 'found_post';
+            final idKey = widget.type == 'Lost' ? 'lostPostID' : 'foundPostID';
+            await _supabase.from(table).update({'location': loc.text, 'remark': rem.text, 'contactInfo': con.text, 'gender': gen}).eq(idKey, widget.post[idKey]);
+            if (mounted) { Navigator.pop(ctx); Navigator.pop(context); }
+          }, child: const Text("SAVE CHANGES")),
+          const SizedBox(height: 30),
+        ]),
+      ),
+    ));
   }
 }

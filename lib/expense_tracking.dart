@@ -14,24 +14,19 @@ class ExpenseTrackingPage extends StatefulWidget {
 class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   final _supabase = Supabase.instance.client;
 
-  // Controllers
   final _amountController = TextEditingController();
   final _noteController = TextEditingController();
 
-  // State
   String _selectedCategory = 'Pet Food';
   DateTime _selectedDate = DateTime.now();
-  // This controls which month the analytics and list display
   DateTime _focusedMonth = DateTime(DateTime.now().year, DateTime.now().month);
   bool _isSaving = false;
 
   final Map<String, double> _monthlyBudgets = {};
   final double _defaultBudget = 1000.0;
 
-  // --- DATA ACCESS ---
   String get _currentUID => _supabase.auth.currentUser!.id;
 
-  // We fetch a broader stream so we can calculate MoM variance by looking at previous months
   Stream<List<Map<String, dynamic>>> get _expenseStream => _supabase
       .from('pet_expenses')
       .stream(primaryKey: ['expenseID'])
@@ -43,19 +38,33 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     return _monthlyBudgets[key] ?? _defaultBudget;
   }
 
-  // --- ANALYTICS CALCULATIONS ---
-
+  // --- UPDATED ANALYTICS CALCULATIONS ---
   Map<String, dynamic> _calculateAdvancedAnalytics(List<Map<String, dynamic>> allData) {
-    final now = DateTime.now();
-
-    // 1. Filter data for the CURRENTLY SELECTED month
+    // 1. Filter current month data
     final focusedMonthData = allData.where((e) {
       DateTime d = DateTime.parse(e['date']);
       return d.year == _focusedMonth.year && d.month == _focusedMonth.month;
     }).toList();
+
     double focusedTotal = focusedMonthData.fold(0, (sum, e) => sum + (e['amount'] ?? 0));
 
-    // 2. Filter data for the month BEFORE the selected month (for MoM Variance)
+    // 2. Calculate Top Spending Category (Financial Leak)
+    Map<String, double> categoryTotals = {};
+    for (var e in focusedMonthData) {
+      String cat = e['category'] ?? 'Others';
+      categoryTotals[cat] = (categoryTotals[cat] ?? 0) + (e['amount'] ?? 0);
+    }
+
+    String topCategory = "None";
+    double topPercent = 0;
+    if (categoryTotals.isNotEmpty) {
+      var sortedEntries = categoryTotals.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      topCategory = sortedEntries.first.key;
+      topPercent = (sortedEntries.first.value / focusedTotal) * 100;
+    }
+
+    // 3. Compare to last month
     DateTime prevMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1);
     final prevMonthData = allData.where((e) {
       DateTime d = DateTime.parse(e['date']);
@@ -63,37 +72,25 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     }).toList();
     double prevTotal = prevMonthData.fold(0, (sum, e) => sum + (e['amount'] ?? 0));
 
-    // Calculate Variance %
     double variance = 0;
     if (prevTotal > 0) {
       variance = ((focusedTotal - prevTotal) / prevTotal) * 100;
     }
 
-    // 3. Daily Burn Rate
-    // If viewing the actual current calendar month, divide by today's date.
-    // Otherwise, divide by total days in that historical month.
-    int daysInMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1, 0).day;
-    int divisor = (_focusedMonth.year == now.year && _focusedMonth.month == now.month)
-        ? now.day
-        : daysInMonth;
-    double burnRate = focusedTotal / (divisor > 0 ? divisor : 1);
-
     return {
       'focusedTotal': focusedTotal,
       'variance': variance,
-      'burnRate': burnRate,
+      'topCategory': topCategory,
+      'topPercent': topPercent,
       'displayData': focusedMonthData,
     };
   }
 
-  // --- MONTH PICKER UI ---
   void _changeMonth(int offset) {
     setState(() {
       _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + offset);
     });
   }
-
-  // --- DATABASE OPERATIONS ---
 
   String _generateExpenseID() {
     return 'EP${(Random().nextInt(90000) + 10000)}';
@@ -132,31 +129,16 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
         elevation: 0,
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
-        // --- MONTH FILTER IN APPBAR ---
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_left),
-              onPressed: () => _changeMonth(-1),
-            ),
-            Text(
-              DateFormat('MMM yyyy').format(_focusedMonth),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            IconButton(
-              icon: const Icon(Icons.arrow_right),
-              onPressed: () => _changeMonth(1),
-            ),
+            IconButton(icon: const Icon(Icons.arrow_left), onPressed: () => _changeMonth(-1)),
+            Text(DateFormat('MMM yyyy').format(_focusedMonth), style: const TextStyle(fontWeight: FontWeight.bold)),
+            IconButton(icon: const Icon(Icons.arrow_right), onPressed: () => _changeMonth(1)),
           ],
         ),
         centerTitle: true,
-        actions: [
-          IconButton(
-              icon: const Icon(Icons.settings_outlined),
-              onPressed: _showBudgetSettings
-          )
-        ],
+        actions: [IconButton(icon: const Icon(Icons.settings_outlined), onPressed: _showBudgetSettings)],
       ),
       body: StreamBuilder<List<Map<String, dynamic>>>(
         stream: _expenseStream,
@@ -169,16 +151,18 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
           return SingleChildScrollView(
             child: Column(
               children: [
-                _buildAnalyticsRow(stats['variance'], stats['burnRate']),
+                // UPDATED ANALYTICS ROW
+                _buildAnalyticsRow(
+                    stats['variance'],
+                    stats['topCategory'],
+                    stats['topPercent']
+                ),
                 _buildBudgetTracker(stats['focusedTotal']),
                 if (displayData.isNotEmpty) ...[
                   _buildCategoryPieChart(displayData),
                   const Padding(
                     padding: EdgeInsets.fromLTRB(20, 10, 20, 5),
-                    child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text("History", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))
-                    ),
+                    child: Align(alignment: Alignment.centerLeft, child: Text("History", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                   ),
                   ListView.builder(
                     shrinkWrap: true,
@@ -212,17 +196,25 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
-  Widget _buildAnalyticsRow(double variance, double burnRate) {
+  // --- UPDATED ANALYTICS ROW UI ---
+  Widget _buildAnalyticsRow(double variance, String topCat, double topPer) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Row(
         children: [
-          _analyticCard("Daily Burn", "RM ${burnRate.toStringAsFixed(2)}", Icons.speed, Colors.blue),
-          const SizedBox(width: 12),
+          // NEW CARD: Top Spending Category
           _analyticCard(
-              "MoM Variance",
+              "Top Spending",
+              "$topCat (${topPer.toStringAsFixed(0)}%)",
+              Icons.warning_amber_rounded,
+              Colors.orange
+          ),
+          const SizedBox(width: 12),
+          // UPDATED CARD: Renamed to "Compared to last month"
+          _analyticCard(
+              "Compared to last month",
               "${variance > 0 ? '+' : ''}${variance.toStringAsFixed(1)}%",
-              Icons.trending_up,
+              Icons.compare_arrows,
               variance > 0 ? Colors.red : Colors.green
           ),
         ],
@@ -234,6 +226,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(15),
+        height: 110, // Fixed height to keep cards aligned
         decoration: BoxDecoration(
           color: color.withOpacity(0.05),
           borderRadius: BorderRadius.circular(15),
@@ -244,8 +237,9 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
           children: [
             Icon(icon, color: color, size: 20),
             const SizedBox(height: 8),
-            Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-            Text(value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color)),
+            Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+            const Spacer(),
+            Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: color)),
           ],
         ),
       ),
@@ -258,10 +252,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.grey[100],
-        borderRadius: BorderRadius.circular(20),
-      ),
+      decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(20)),
       child: Column(
         children: [
           Row(
@@ -309,10 +300,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.grey[200]!),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.grey[200]!)),
       child: ListTile(
         leading: CircleAvatar(
           backgroundColor: _getCategoryColor(item['category']).withOpacity(0.1),
@@ -333,10 +321,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       _selectedCategory = existingData['category'];
       _selectedDate = DateTime.parse(existingData['date']);
     } else {
-      _amountController.clear();
-      _noteController.clear();
-      _selectedCategory = 'Pet Food';
-      _selectedDate = DateTime.now();
+      _amountController.clear(); _noteController.clear(); _selectedCategory = 'Pet Food'; _selectedDate = DateTime.now();
     }
 
     showModalBottomSheet(
@@ -351,18 +336,12 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
             children: [
               const Text("Expense Record", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 15),
-              // DATE PICKER
               ListTile(
                 title: Text("Date: ${DateFormat('yyyy-MM-dd').format(_selectedDate)}"),
                 trailing: const Icon(Icons.edit_calendar, color: Colors.teal),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey[300]!)),
                 onTap: () async {
-                  final picked = await showDatePicker(
-                      context: context,
-                      initialDate: _selectedDate,
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime(2100)
-                  );
+                  final picked = await showDatePicker(context: context, initialDate: _selectedDate, firstDate: DateTime(2020), lastDate: DateTime(2100));
                   if (picked != null) setModalState(() => _selectedDate = picked);
                 },
               ),

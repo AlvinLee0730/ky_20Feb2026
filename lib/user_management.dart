@@ -15,7 +15,7 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  // 核心样式规范
+  // Core style specifications
   final Color themeColor = Colors.teal;
   final double borderRadius = 15.0;
 
@@ -23,7 +23,7 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
 
-  // 统一的输入框装饰器
+  // Unified input field decorator
   InputDecoration _loginInputStyle(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
@@ -37,20 +37,33 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
+  // Helper method for direct login
+  void _quickLogin(String email, String password) {
+    _emailController.text = email;
+    _passwordController.text = password;
+    _login();
+  }
+
   Future<void> _login() async {
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) return;
+
     setState(() => _isLoading = true);
     try {
       final res = await supabase.auth.signInWithPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-      if (res.user != null) {
+      if (res.user != null && mounted) {
         Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MainNavigation()));
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -88,6 +101,43 @@ class _LoginPageState extends State<LoginPage> {
               ),
               child: const Text('LOGIN', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
+
+            // --- Direct Login Buttons Section ---
+            const SizedBox(height: 32),
+            const Text("Quick Login (Dev Mode)", style: TextStyle(color: Colors.grey, fontSize: 12)),
+            const Divider(),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _quickLogin("admin@gmail.com", "123456"),
+                    icon: const Icon(Icons.admin_panel_settings, size: 18),
+                    label: const Text("Admin"),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: themeColor,
+                      side: BorderSide(color: themeColor),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _quickLogin("ky@gmail.com", "123456"),
+                    icon: const Icon(Icons.person, size: 18),
+                    label: const Text("User KY"),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: themeColor,
+                      side: BorderSide(color: themeColor),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            // ------------------------------------
+
             const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -145,7 +195,6 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   Future<void> _register() async {
-    // ... 逻辑保持不变 ...
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
@@ -166,11 +215,13 @@ class _RegisterPageState extends State<RegisterPage> {
           'phoneNumber': _phoneController.text.trim(), 'userPhoto': imageUrl,
           'accountStatus': 'Active', 'role': 'User',
         });
-        Navigator.pop(context);
+        if (mounted) Navigator.pop(context);
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-    } finally { setState(() => _isLoading = false); }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
