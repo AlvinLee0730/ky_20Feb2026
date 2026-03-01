@@ -17,8 +17,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Supabase.initialize(
-    url: 'https://zbmxmfnsqlkzguumlfip.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpibXhtZm5zcWxremd1dW1sZmlwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg2NDc0NDUsImV4cCI6MjA4NDIyMzQ0NX0.c7esc22nznThDauT9wKUDvXHdSMZGqECyPFw6I4GQ4Y',
+    url: 'https://pypxpvamkqtnjyhqsycs.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5cHhwdmFta3F0bmp5aHFzeWNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MjAwNzAsImV4cCI6MjA4Njk5NjA3MH0.hhBjN5JK5UpvaOv3FJXPi0KcbmpAdJOlpcMfKUEKqX0',
   );
 
   runApp(const PetCareApp());
