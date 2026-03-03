@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'createSchedule.dart';
 import 'scheduleDetail.dart';
 
+
 final supabase = Supabase.instance.client;
 
 class SchedulePage extends StatefulWidget {

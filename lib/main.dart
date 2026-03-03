@@ -10,12 +10,13 @@ import 'admin_approval.dart';
 import 'user_management.dart';
 import 'chat.dart';
 import 'forum.dart';
-import 'user_profile.dart'; // <- 新拆出的 ProfilePage
+import 'user_profile.dart';
 import 'petModule/petProfile.dart';
+import 'notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
+  await NotificationService.init();
   await Supabase.initialize(
     url: 'https://pypxpvamkqtnjyhqsycs.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5cHhwdmFta3F0bmp5aHFzeWNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MjAwNzAsImV4cCI6MjA4Njk5NjA3MH0.hhBjN5JK5UpvaOv3FJXPi0KcbmpAdJOlpcMfKUEKqX0',
