@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart'; // 记得添加这个 package 用于格式化日期
 
 final supabase = Supabase.instance.client;
 
@@ -20,12 +21,15 @@ class _CreatePetPageState extends State<CreatePetPage> {
   final _species = TextEditingController();
   final _breed = TextEditingController();
   final _remarks = TextEditingController();
+  // ⭐ 新增 weight controller
+  final _weight = TextEditingController();
 
   DateTime? _birthDate;
+  // ⭐ 新增疫苗过期日期变量
+  DateTime? _vaccinationExpiry;
+
   File? _imageFile;
   bool _loading = false;
-
-  // ⭐ 新增 gender
   String? _gender;
 
   InputDecoration _inputStyle(String label, IconData icon) {
@@ -41,11 +45,8 @@ class _CreatePetPageState extends State<CreatePetPage> {
     );
   }
 
-  // ================= IMAGE =================
   Future<void> _pickImage() async {
-    final picked =
-    await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 70);
-
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 70);
     if (picked != null) {
       setState(() => _imageFile = File(picked.path));
     }
@@ -63,45 +64,37 @@ class _CreatePetPageState extends State<CreatePetPage> {
     setState(() => _loading = true);
 
     try {
-      final userId = supabase.auth.currentUser!.id; // ⭐ non-null fix
-
+      final userId = supabase.auth.currentUser!.id;
       String? imageUrl;
 
-      // upload image
       if (_imageFile != null) {
-        final fileName =
-            'pet_${DateTime.now().millisecondsSinceEpoch}.jpg';
-
-        await supabase.storage
-            .from('pet_photos')
-            .upload(fileName, _imageFile!);
-
-        imageUrl =
-            supabase.storage.from('pet_photos').getPublicUrl(fileName);
+        final fileName = 'pet_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        await supabase.storage.from('pet_photos').upload(fileName, _imageFile!);
+        imageUrl = supabase.storage.from('pet_photos').getPublicUrl(fileName);
       }
 
-      // ⭐ INSERT
+      // ⭐ INSERT 更新字段
       await supabase.from('pet').insert({
         'petName': _name.text.trim(),
         'species': _species.text.trim(),
         'breed': _breed.text.trim(),
-        'gender': _gender, // ⭐ 新增
+        'gender': _gender,
         'birthDate': _birthDate!.toIso8601String(),
+        'weight': double.tryParse(_weight.text) ?? 0.0, // ⭐ 新增 weight
+        'vaccinationExpiry': _vaccinationExpiry?.toIso8601String(), // ⭐ 新增疫苗过期日期
         'petPhoto': imageUrl,
         'remarks': _remarks.text.trim(),
-        'userID': userId, // ⭐ 修正 ownerID → userID
+        'userID': userId,
       });
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Error: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  // ================= UI =================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -114,74 +107,48 @@ class _CreatePetPageState extends State<CreatePetPage> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // IMAGE
             GestureDetector(
               onTap: _pickImage,
               child: CircleAvatar(
                 radius: 60,
                 backgroundColor: Colors.grey[200],
-                backgroundImage:
-                _imageFile != null ? FileImage(_imageFile!) : null,
-                child: _imageFile == null
-                    ? Icon(Icons.add_a_photo, size: 40, color: themeColor)
-                    : null,
+                backgroundImage: _imageFile != null ? FileImage(_imageFile!) : null,
+                child: _imageFile == null ? Icon(Icons.add_a_photo, size: 40, color: themeColor) : null,
               ),
             ),
-
             const SizedBox(height: 30),
 
-            // NAME
-            TextField(
-              controller: _name,
-              decoration: _inputStyle('Pet Name', Icons.badge),
-            ),
-
+            TextField(controller: _name, decoration: _inputStyle('Pet Name', Icons.badge)),
             const SizedBox(height: 15),
 
-            // SPECIES
+            // ⭐ 重量输入框
             TextField(
-              controller: _species,
-              decoration: _inputStyle('Species', Icons.category),
+                controller: _weight,
+                keyboardType: TextInputType.number,
+                decoration: _inputStyle('Weight (kg)', Icons.monitor_weight_outlined)
             ),
-
             const SizedBox(height: 15),
 
-            // BREED
-            TextField(
-              controller: _breed,
-              decoration: _inputStyle('Breed', Icons.pets),
-            ),
-
+            TextField(controller: _species, decoration: _inputStyle('Species', Icons.category)),
             const SizedBox(height: 15),
 
-            // ⭐⭐⭐ GENDER DROPDOWN ⭐⭐⭐
             DropdownButtonFormField<String>(
               value: _gender,
               decoration: _inputStyle('Gender', Icons.wc),
               items: const [
                 DropdownMenuItem(value: 'Male', child: Text('Male')),
                 DropdownMenuItem(value: 'Female', child: Text('Female')),
-                DropdownMenuItem(value: 'Unknown', child: Text('Unknown')),
               ],
-              onChanged: (value) {
-                setState(() => _gender = value);
-              },
+              onChanged: (value) => setState(() => _gender = value),
             ),
-
             const SizedBox(height: 15),
 
-            // BIRTH DATE
+            // 出生日期
             ListTile(
               tileColor: Colors.grey[100],
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(borderRadius),
-              ),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
               leading: Icon(Icons.calendar_today, color: themeColor),
-              title: Text(
-                _birthDate == null
-                    ? 'Select Birth Date'
-                    : _birthDate!.toLocal().toString().split(' ')[0],
-              ),
+              title: Text(_birthDate == null ? 'Select Birth Date' : DateFormat('yyyy-MM-dd').format(_birthDate!)),
               onTap: () async {
                 final picked = await showDatePicker(
                   context: context,
@@ -189,23 +156,37 @@ class _CreatePetPageState extends State<CreatePetPage> {
                   firstDate: DateTime(2000),
                   lastDate: DateTime.now(),
                 );
-
                 if (picked != null) setState(() => _birthDate = picked);
+              },
+            ),
+            const SizedBox(height: 15),
+
+            // ⭐⭐⭐ 疫苗过期日期选择器 ⭐⭐⭐
+            ListTile(
+              tileColor: Colors.teal[50], // 换个颜色区分一下
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
+              leading: Icon(Icons.vaccines, color: themeColor),
+              title: Text(
+                  _vaccinationExpiry == null
+                      ? 'Last Vaccination Expiry Date'
+                      : 'Expiry: ${DateFormat('yyyy-MM-dd').format(_vaccinationExpiry!)}'
+              ),
+              subtitle: const Text("Optional: For reminder purposes", style: TextStyle(fontSize: 11)),
+              onTap: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: DateTime.now().add(const Duration(days: 365)), // 默认显示一年后
+                  firstDate: DateTime.now().subtract(const Duration(days: 365)), // 也可以选去年的
+                  lastDate: DateTime(2100),
+                );
+                if (picked != null) setState(() => _vaccinationExpiry = picked);
               },
             ),
 
             const SizedBox(height: 15),
-
-            // REMARKS
-            TextField(
-              controller: _remarks,
-              maxLines: 3,
-              decoration: _inputStyle('Remarks', Icons.description),
-            ),
-
+            TextField(controller: _remarks, maxLines: 2, decoration: _inputStyle('Remarks', Icons.description)),
             const SizedBox(height: 40),
 
-            // BUTTON
             _loading
                 ? CircularProgressIndicator(color: themeColor)
                 : ElevatedButton(
@@ -214,15 +195,9 @@ class _CreatePetPageState extends State<CreatePetPage> {
                 backgroundColor: themeColor,
                 foregroundColor: Colors.white,
                 minimumSize: const Size(double.infinity, 55),
-                shape: RoundedRectangleBorder(
-                  borderRadius:
-                  BorderRadius.circular(borderRadius),
-                ),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
               ),
-              child: const Text(
-                'SAVE PET',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              child: const Text('SAVE PET', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         ),

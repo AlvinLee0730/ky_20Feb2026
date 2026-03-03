@@ -3,6 +3,7 @@ import 'addPet.dart';
 import 'editPet.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:newfypken/scheduleModule/schedule.dart';
+import 'package:newfypken/foodModule/foodListPage.dart';
 
 final supabase = Supabase.instance.client;
 
@@ -88,7 +89,19 @@ class _PetProfilePageState extends State<PetProfilePage> {
                 }),
 
                 _buildQuickAction(Icons.restaurant, "Food", () {
-                  // TODO: Navigate to Food page
+                  if (_pets.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Please add a pet first!")),
+                    );
+                    return;
+                  }
+
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => FoodListPage(pets: _pets),
+                    ),
+                  );
                 }),
               ],
             ),
@@ -139,6 +152,7 @@ class _PetProfilePageState extends State<PetProfilePage> {
   }
 
   // ================= 宠物列表 =================
+  // ================= 宠物列表 =================
   Widget _buildPetList() {
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -147,58 +161,83 @@ class _PetProfilePageState extends State<PetProfilePage> {
         final pet = _pets[index];
         final String photoUrl = pet['petPhoto']?.toString() ?? '';
 
-        // 计算年龄
+        // --- 逻辑处理：计算年龄 ---
         String ageText = '-';
-        if (pet['birthDate'] != null && pet['birthDate'].toString().isNotEmpty) {
-          try {
-            final birthDate = DateTime.parse(pet['birthDate']);
-            final now = DateTime.now();
-            final years = now.year - birthDate.year - ((now.month < birthDate.month || (now.month == birthDate.month && now.day < birthDate.day)) ? 1 : 0);
-            ageText = '$years yr${years > 1 ? 's' : ''}';
-          } catch (e) {
-            ageText = '-';
-          }
+        if (pet['birthDate'] != null) {
+          final birthDate = DateTime.parse(pet['birthDate']);
+          final years = DateTime.now().year - birthDate.year;
+          ageText = '$years yr${years > 1 ? 's' : ''}';
         }
 
-        // 性别
-        final genderText = pet['gender'] != null && pet['gender'].toString().isNotEmpty ? pet['gender'] : '-';
+        // --- 逻辑处理：判断疫苗是否快过期 ---
+        bool isVaccineExpiring = false;
+        if (pet['vaccinationExpiry'] != null) {
+          final expiryDate = DateTime.parse(pet['vaccinationExpiry']);
+          // 如果过期时间少于 30 天，显示警告
+          isVaccineExpiring = expiryDate.isBefore(DateTime.now().add(const Duration(days: 30)));
+        }
+
+        // --- 逻辑处理：体重展示 ---
+        final weightText = pet['weight'] != null ? "${pet['weight']} kg" : "No weight";
 
         return Container(
           margin: const EdgeInsets.only(bottom: 16),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(borderRadius),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4)),
-            ],
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))],
           ),
           child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             leading: Container(
-              width: 60,
-              height: 60,
+              width: 65,
+              height: 65,
               decoration: BoxDecoration(
                 color: themeColor.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-                image: photoUrl.isNotEmpty
-                    ? DecorationImage(image: NetworkImage(photoUrl), fit: BoxFit.cover)
-                    : null,
+                borderRadius: BorderRadius.circular(15),
+                image: photoUrl.isNotEmpty ? DecorationImage(image: NetworkImage(photoUrl), fit: BoxFit.cover) : null,
               ),
               child: photoUrl.isEmpty ? Icon(Icons.pets, color: themeColor, size: 30) : null,
             ),
-            title: Text(pet['petName'] ?? '-', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                '${pet['species'] ?? ''} • ${pet['breed'] ?? 'Unknown'} • $genderText • $ageText',
-                style: TextStyle(color: Colors.grey[600]),
-              ),
+            title: Row(
+              children: [
+                Text(pet['petName'] ?? '-', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                const SizedBox(width: 8),
+                // ⭐ 性别图标
+                Icon(
+                  pet['gender'] == 'Male' ? Icons.male : Icons.female,
+                  size: 16,
+                  color: pet['gender'] == 'Male' ? Colors.blue : Colors.pink,
+                ),
+              ],
             ),
-            trailing: CircleAvatar(
-              radius: 15,
-              backgroundColor: Colors.grey[100],
-              child: const Icon(Icons.arrow_forward_ios, size: 12, color: Colors.grey),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 4),
+                Text('${pet['species']} | ${pet['breed']} | $ageText', style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    // ⭐ 显示体重
+                    Icon(Icons.monitor_weight_outlined, size: 14, color: themeColor),
+                    const SizedBox(width: 4),
+                    Text(weightText, style: TextStyle(color: themeColor, fontSize: 12, fontWeight: FontWeight.bold)),
+                    const SizedBox(width: 12),
+                    // ⭐ 疫苗到期提醒
+                    if (pet['vaccinationExpiry'] != null) ...[
+                      Icon(Icons.vaccines, size: 14, color: isVaccineExpiring ? Colors.orange : Colors.grey),
+                      const SizedBox(width: 4),
+                      Text(
+                        isVaccineExpiring ? "Vaccine Due!" : "Protected",
+                        style: TextStyle(color: isVaccineExpiring ? Colors.orange : Colors.grey, fontSize: 11),
+                      ),
+                    ]
+                  ],
+                ),
+              ],
             ),
+            trailing: const Icon(Icons.chevron_right, color: Colors.grey),
             onTap: () async {
               final result = await Navigator.push(context, MaterialPageRoute(builder: (_) => EditPetPage(petData: pet)));
               if (result == true) _fetchPets();

@@ -1,6 +1,10 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:location/location.dart' as loc;
+import 'package:geocoding/geocoding.dart';
+import 'package:newfypken/notification_service.dart'; // 导入通知服务
 
 final supabase = Supabase.instance.client;
 
@@ -13,20 +17,22 @@ class EditSchedulePage extends StatefulWidget {
 }
 
 class _EditSchedulePageState extends State<EditSchedulePage> {
-  // --- 样式规范：同步队友基因 ---
+  // --- 样式规范 ---
   final Color themeColor = Colors.teal;
   final double borderRadius = 15.0;
 
   String? _selectedType;
   String? _selectedTitle;
   final _descController = TextEditingController();
-  final _repeatTypeController = TextEditingController(); // 建议改为控制器或下拉
+  String _selectedRepeat = 'None';
 
   DateTime? _selectedDate;
   TimeOfDay? _startTime;
   TimeOfDay? _endTime;
 
   bool _isLoading = false;
+  bool _isLocating = false;
+  LatLng? _pickedLocation;
 
   final Map<String, List<String>> scheduleTypeToTitle = {
     'Activity': ['Feed', 'Walk', 'Play Ball', 'Training'],
@@ -37,18 +43,16 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
   @override
   void initState() {
     super.initState();
+    // 初始化已有数据
     _selectedType = widget.schedule['scheduleType'];
     _selectedTitle = widget.schedule['title'];
     _descController.text = widget.schedule['description'] ?? '';
-    // 假设数据里叫 repeatType
     _selectedRepeat = widget.schedule['repeatType'] ?? 'None';
 
     _selectedDate = DateTime.tryParse(widget.schedule['date'] ?? '');
     _startTime = _parseTime(widget.schedule['startTime']);
     _endTime = _parseTime(widget.schedule['endTime']);
   }
-
-  String _selectedRepeat = 'None'; // 为了 UI 一致性，建议用下拉
 
   TimeOfDay? _parseTime(String? timeStr) {
     if (timeStr == null || timeStr.isEmpty) return null;
@@ -57,7 +61,6 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
     return TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
   }
 
-  // 统一的输入框样式
   InputDecoration _inputDecoration(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
@@ -72,14 +75,72 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
     );
   }
 
+  // --- 地图选址逻辑 ---
+  Future<void> _showOSMPicker() async {
+    setState(() => _isLocating = true);
+    try {
+      loc.Location location = loc.Location();
+      loc.LocationData locationData = await location.getLocation();
+      LatLng currentLatLng = LatLng(locationData.latitude!, locationData.longitude!);
+
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text("Update Medical Location"),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 400,
+              child: FlutterMap(
+                options: MapOptions(
+                  initialCenter: currentLatLng,
+                  initialZoom: 15,
+                  onTap: (tapPosition, point) async {
+                    setDialogState(() => _pickedLocation = point);
+                    try {
+                      List<Placemark> placemarks = await placemarkFromCoordinates(
+                          point.latitude, point.longitude);
+                      if (placemarks.isNotEmpty) {
+                        Placemark place = placemarks.first;
+                        _descController.text = "Hospital: ${place.name}, ${place.street}, ${place.locality}";
+                      }
+                    } catch (e) {
+                      _descController.text = "Lat: ${point.latitude}, Lng: ${point.longitude}";
+                    }
+                    Future.delayed(const Duration(milliseconds: 500), () => Navigator.pop(context));
+                  },
+                ),
+                children: [
+                  TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'),
+                  if (_pickedLocation != null)
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: _pickedLocation!,
+                          child: const Icon(Icons.location_on, color: Colors.red, size: 40),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint("Location Error: $e");
+    } finally {
+      setState(() => _isLocating = false);
+    }
+  }
+
   Future<void> _pickDate() async {
-    final today = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDate ?? today,
-      firstDate: today.subtract(const Duration(days: 365)),
-      lastDate: today.add(const Duration(days: 365)),
-      builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: ColorScheme.light(primary: themeColor)), child: child!),
+      initialDate: _selectedDate ?? DateTime.now(),
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
     );
     if (picked != null) setState(() => _selectedDate = picked);
   }
@@ -88,62 +149,56 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
     final picked = await showTimePicker(
       context: context,
       initialTime: isStart ? (_startTime ?? TimeOfDay.now()) : (_endTime ?? TimeOfDay.now()),
-      builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: ColorScheme.light(primary: themeColor)), child: child!),
     );
     if (picked != null) setState(() => isStart ? _startTime = picked : _endTime = picked);
   }
 
-  // ... (保留原有的 _editSchedule 和 _deleteSchedule 逻辑) ...
+  // ⭐ 修改核心：更新数据库并重设通知
   Future<void> _editSchedule() async {
-    if (_selectedType == null || _selectedTitle == null || _selectedDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Type, Title and Date are required')));
+    if (_selectedType == null || _selectedTitle == null || _selectedDate == null || _startTime == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Missing fields')));
       return;
     }
     setState(() => _isLoading = true);
     try {
       final dateString = "${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2,'0')}-${_selectedDate!.day.toString().padLeft(2,'0')}";
-      final startTimeString = _startTime != null ? "${_startTime!.hour.toString().padLeft(2,'0')}:${_startTime!.minute.toString().padLeft(2,'0')}:00" : null;
-      final endTimeString = _endTime != null ? "${_endTime!.hour.toString().padLeft(2,'0')}:${_endTime!.minute.toString().padLeft(2,'0')}:00" : null;
+      final startTimeString = "${_startTime!.hour.toString().padLeft(2,'0')}:${_startTime!.minute.toString().padLeft(2,'0')}:00";
 
+      // 1. 更新数据库
       await supabase.from('schedule').update({
         'scheduleType': _selectedType,
         'title': _selectedTitle,
-        'description': _descController.text,
+        'description': _descController.text.trim(),
         'date': dateString,
         'startTime': startTimeString,
-        'endTime': endTimeString,
         'repeatType': _selectedRepeat,
       }).eq('scheduleID', widget.schedule['scheduleID']);
+
+      // 2. ⭐ 通知逻辑：先取消旧的，再设新的
+      // 我们使用 scheduleID 作为通知 ID（确保它是 int 类型），这样就能精准找到并覆盖
+      int notifId = int.tryParse(widget.schedule['scheduleID'].toString()) ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+      // 先取消旧的提醒
+      await NotificationService.cancelNotification(notifId);
+
+      // 设定新的提醒时间
+      final newScheduleTime = DateTime(
+        _selectedDate!.year, _selectedDate!.month, _selectedDate!.day,
+        _startTime!.hour, _startTime!.minute,
+      );
+
+      // 重新安排通知
+      await NotificationService.scheduleNotification(
+        id: notifId,
+        title: "Updated Task: $_selectedTitle",
+        body: "$_selectedTitle for your pet",
+        scheduledTime: newScheduleTime,
+        repeatType: _selectedRepeat,
+      );
+
       Navigator.pop(context, true);
     } catch (e) {
       debugPrint("Update Error: $e");
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _deleteSchedule() async {
-    // 添加删除确认弹窗（符合队友的交互习惯）
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Delete Schedule?"),
-        content: const Text("Are you sure you want to remove this activity?"),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Delete", style: TextStyle(color: Colors.red))),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-
-    setState(() => _isLoading = true);
-    try {
-      await supabase.from('schedule').delete().eq('scheduleID', widget.schedule['scheduleID']);
-      Navigator.pop(context, true);
-    } catch (e) {
-      debugPrint("Delete Error: $e");
     } finally {
       setState(() => _isLoading = false);
     }
@@ -154,7 +209,6 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Edit Schedule'),
-        centerTitle: true,
         backgroundColor: themeColor,
         foregroundColor: Colors.white,
         elevation: 0,
@@ -162,9 +216,7 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 类型选择
             DropdownButtonFormField<String>(
               value: _selectedType,
               decoration: _inputDecoration('Schedule Type', Icons.category),
@@ -173,7 +225,6 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
             ),
             const SizedBox(height: 16),
 
-            // 标题选择
             if (_selectedType != null) ...[
               DropdownButtonFormField<String>(
                 value: _selectedTitle,
@@ -182,9 +233,33 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
                 onChanged: (val) => setState(() => _selectedTitle = val),
               ),
               const SizedBox(height: 16),
+
+              if (_selectedType == 'Medical') ...[
+                InkWell(
+                  onTap: _isLocating ? null : _showOSMPicker,
+                  child: Container(
+                    padding: const EdgeInsets.all(15),
+                    decoration: BoxDecoration(
+                      color: Colors.red[50],
+                      borderRadius: BorderRadius.circular(borderRadius),
+                      border: Border.all(color: Colors.red[200]!),
+                    ),
+                    child: Row(
+                      children: [
+                        _isLocating
+                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                            : Icon(Icons.local_hospital, color: Colors.red[700]),
+                        const SizedBox(width: 12),
+                        const Expanded(child: Text("Update Hospital Location", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.redAccent))),
+                        const Icon(Icons.gps_fixed, size: 18, color: Colors.redAccent),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
             ],
 
-            // 描述
             TextField(
               controller: _descController,
               maxLines: 2,
@@ -192,7 +267,6 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
             ),
             const SizedBox(height: 16),
 
-            // 重复类型下拉
             DropdownButtonFormField<String>(
               value: _selectedRepeat,
               decoration: _inputDecoration('Repeat', Icons.repeat),
@@ -201,9 +275,6 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
             ),
             const SizedBox(height: 24),
 
-            // 日期时间选择（卡片式）
-            const Text("Date & Time", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            const SizedBox(height: 10),
             Container(
               decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(borderRadius)),
               child: Column(
@@ -219,50 +290,22 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
                     title: Text(_startTime == null ? 'Set Start' : "Starts at ${_startTime!.format(context)}"),
                     onTap: () => _pickTime(true),
                   ),
-                  const Divider(height: 1, indent: 50),
-                  ListTile(
-                    leading: Icon(Icons.update, color: themeColor),
-                    title: Text(_endTime == null ? 'Set End' : "Ends at ${_endTime!.format(context)}"),
-                    onTap: () => _pickTime(false),
-                  ),
                 ],
               ),
             ),
             const SizedBox(height: 40),
 
-            // 操作按钮：对齐队友 Chat 模块的双按钮风格
             _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _editSchedule,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: themeColor,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(double.infinity, 55),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
-                      elevation: 0,
-                    ),
-                    child: const Text('SAVE', style: TextStyle(fontWeight: FontWeight.bold)),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _deleteSchedule,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red[400],
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(double.infinity, 55),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
-                      elevation: 0,
-                    ),
-                    child: const Text('DELETE', style: TextStyle(fontWeight: FontWeight.bold)),
-                  ),
-                ),
-              ],
+                ? const CircularProgressIndicator()
+                : ElevatedButton(
+              onPressed: _editSchedule,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: themeColor,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 55),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
+              ),
+              child: const Text('SAVE CHANGES', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         ),

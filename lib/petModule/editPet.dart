@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart';
 
 final supabase = Supabase.instance.client;
 
@@ -22,8 +23,10 @@ class _EditPetPageState extends State<EditPetPage> {
   late TextEditingController _species;
   late TextEditingController _breed;
   late TextEditingController _remarks;
+  late TextEditingController _weight;
 
   DateTime? _birthDate;
+  DateTime? _vaccinationExpiry;
   File? _imageFile;
   String? _gender;
   bool _loading = false;
@@ -31,12 +34,16 @@ class _EditPetPageState extends State<EditPetPage> {
   @override
   void initState() {
     super.initState();
+    // 初始化数据
     _name = TextEditingController(text: widget.petData['petName'] ?? '');
     _species = TextEditingController(text: widget.petData['species'] ?? '');
     _breed = TextEditingController(text: widget.petData['breed'] ?? '');
     _remarks = TextEditingController(text: widget.petData['remarks'] ?? '');
+    _weight = TextEditingController(text: widget.petData['weight']?.toString() ?? '');
+
     _birthDate = DateTime.tryParse(widget.petData['birthDate'] ?? '');
-    _gender = widget.petData['gender'] ?? null;
+    _vaccinationExpiry = DateTime.tryParse(widget.petData['vaccinationExpiry'] ?? '');
+    _gender = widget.petData['gender'];
   }
 
   @override
@@ -45,9 +52,11 @@ class _EditPetPageState extends State<EditPetPage> {
     _species.dispose();
     _breed.dispose();
     _remarks.dispose();
+    _weight.dispose();
     super.dispose();
   }
 
+  // --- 辅助样式 ---
   InputDecoration _inputStyle(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
@@ -62,30 +71,18 @@ class _EditPetPageState extends State<EditPetPage> {
     );
   }
 
-  // ================= PICK IMAGE =================
+  // --- 选择图片 ---
   Future<void> _pickImage() async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 70,
-    );
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 70);
     if (picked != null) setState(() => _imageFile = File(picked.path));
   }
 
-  // ================= UPLOAD IMAGE =================
+  // --- 上传图片 ---
   Future<String?> _uploadImage() async {
     if (_imageFile == null) return widget.petData['petPhoto'];
-
     try {
-      final userId = supabase.auth.currentUser!.id;
-      final fileName = '$userId/pet_${DateTime.now().millisecondsSinceEpoch}.jpg';
-
-      await supabase.storage.from('pet_photos').upload(
-        fileName,
-        _imageFile!,
-        fileOptions: const FileOptions(upsert: true),
-      );
-
+      final fileName = 'pet_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      await supabase.storage.from('pet_photos').upload(fileName, _imageFile!);
       return supabase.storage.from('pet_photos').getPublicUrl(fileName);
     } catch (e) {
       debugPrint("Upload error: $e");
@@ -93,84 +90,60 @@ class _EditPetPageState extends State<EditPetPage> {
     }
   }
 
-  // ================= UPDATE PET =================
+  // --- 更新逻辑 ---
   Future<void> _updatePet() async {
-    if (_gender == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please select a gender")),
-      );
-      return;
-    }
-
     setState(() => _loading = true);
     try {
       final imageUrl = await _uploadImage();
       final userId = supabase.auth.currentUser!.id;
 
-      await supabase
-          .from('pet')
-          .update({
+      await supabase.from('pet').update({
         'petName': _name.text.trim(),
         'species': _species.text.trim(),
         'breed': _breed.text.trim(),
         'gender': _gender,
         'birthDate': _birthDate?.toIso8601String(),
+        'weight': double.tryParse(_weight.text) ?? 0.0,
+        'vaccinationExpiry': _vaccinationExpiry?.toIso8601String(),
         'petPhoto': imageUrl,
         'remarks': _remarks.text.trim(),
-      })
-          .eq('petID', widget.petData['petID'])
-          .eq('userID', userId);
+      }).eq('petID', widget.petData['petID']).eq('userID', userId);
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Update failed: $e")),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Update failed: $e")));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  // ================= DELETE PET =================
+  // --- 删除逻辑 ---
   Future<void> _deletePet() async {
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Confirm Delete"),
-        content: const Text("Are you sure you want to delete this pet? This action cannot be undone."),
+      builder: (ctx) => AlertDialog(
+        title: const Text("Delete Pet?"),
+        content: const Text("This will permanently remove this pet profile."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text("Delete", style: TextStyle(color: Colors.red)),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Delete", style: TextStyle(color: Colors.red))),
         ],
       ),
     );
 
-    if (confirm != true) return;
-
-    setState(() => _loading = true);
-    try {
-      final userId = supabase.auth.currentUser!.id;
-
-      await supabase
-          .from('pet')
-          .delete()
-          .eq('petID', widget.petData['petID'])
-          .eq('userID', userId);
-
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Delete failed: $e")),
-      );
-    } finally {
-      if (mounted) setState(() => _loading = false);
+    if (confirm == true) {
+      setState(() => _loading = true);
+      try {
+        await supabase.from('pet').delete().eq('petID', widget.petData['petID']);
+        if (mounted) Navigator.pop(context, true);
+      } catch (e) {
+        debugPrint("Delete error: $e");
+      } finally {
+        if (mounted) setState(() => _loading = false);
+      }
     }
   }
 
-  // ================= UI =================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -179,69 +152,69 @@ class _EditPetPageState extends State<EditPetPage> {
         backgroundColor: themeColor,
         foregroundColor: Colors.white,
         centerTitle: true,
+        actions: [
+          IconButton(icon: const Icon(Icons.delete_outline), onPressed: _deletePet),
+        ],
       ),
-      body: SingleChildScrollView(
+      body: _loading
+          ? Center(child: CircularProgressIndicator(color: themeColor))
+          : SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            _buildAvatar(),
+            // 头像部分
+            GestureDetector(
+              onTap: _pickImage,
+              child: CircleAvatar(
+                radius: 60,
+                backgroundColor: Colors.grey[200],
+                backgroundImage: _imageFile != null
+                    ? FileImage(_imageFile!)
+                    : (widget.petData['petPhoto'] != null ? NetworkImage(widget.petData['petPhoto']) : null) as ImageProvider?,
+                child: (_imageFile == null && widget.petData['petPhoto'] == null)
+                    ? Icon(Icons.add_a_photo, size: 40, color: themeColor)
+                    : null,
+              ),
+            ),
             const SizedBox(height: 30),
 
             TextField(controller: _name, decoration: _inputStyle('Pet Name', Icons.badge)),
+            const SizedBox(height: 15),
+            TextField(controller: _weight, keyboardType: TextInputType.number, decoration: _inputStyle('Weight (kg)', Icons.monitor_weight)),
             const SizedBox(height: 15),
             TextField(controller: _species, decoration: _inputStyle('Species', Icons.category)),
             const SizedBox(height: 15),
             TextField(controller: _breed, decoration: _inputStyle('Breed', Icons.pets)),
             const SizedBox(height: 15),
 
-            // Gender Dropdown
             DropdownButtonFormField<String>(
               value: _gender,
               decoration: _inputStyle('Gender', Icons.wc),
               items: const [
                 DropdownMenuItem(value: 'Male', child: Text('Male')),
                 DropdownMenuItem(value: 'Female', child: Text('Female')),
-                DropdownMenuItem(value: 'Unknown', child: Text('Unknown')),
               ],
-              onChanged: (value) {
-                setState(() => _gender = value);
-              },
+              onChanged: (value) => setState(() => _gender = value),
             ),
             const SizedBox(height: 15),
 
-            _buildDatePicker(),
+            _buildDatePicker("Birth Date", _birthDate, (date) => setState(() => _birthDate = date)),
+            const SizedBox(height: 15),
+            _buildDatePicker("Vaccination Expiry", _vaccinationExpiry, (date) => setState(() => _vaccinationExpiry = date), icon: Icons.vaccines),
             const SizedBox(height: 15),
 
-            TextField(
-              controller: _remarks,
-              maxLines: 3,
-              decoration: _inputStyle('Remarks', Icons.description),
-            ),
+            TextField(controller: _remarks, maxLines: 3, decoration: _inputStyle('Remarks', Icons.description)),
+            const SizedBox(height: 30),
 
-            const SizedBox(height: 20),
-
-            // Update button
-            _loading
-                ? CircularProgressIndicator(color: themeColor)
-                : ElevatedButton(
+            ElevatedButton(
               onPressed: _updatePet,
               style: ElevatedButton.styleFrom(
                 backgroundColor: themeColor,
+                foregroundColor: Colors.white,
                 minimumSize: const Size(double.infinity, 55),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
               ),
-              child: const Text('UPDATE CHANGES'),
-            ),
-
-            const SizedBox(height: 15),
-
-            // Delete button
-            ElevatedButton(
-              onPressed: _deletePet,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                minimumSize: const Size(double.infinity, 50),
-              ),
-              child: const Text('DELETE PET', style: TextStyle(color: Colors.white)),
+              child: const Text('UPDATE CHANGES', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         ),
@@ -249,73 +222,31 @@ class _EditPetPageState extends State<EditPetPage> {
     );
   }
 
-  // ================= WIDGETS =================
-  Widget _buildAvatar() {
-    return Stack(
-      children: [
-        ClipOval(
-          child: SizedBox(
-            width: 120,
-            height: 120,
-            child: _buildImageDisplay(),
-          ),
-        ),
-        Positioned(
-          bottom: 0,
-          right: 0,
-          child: GestureDetector(
-            onTap: _pickImage,
-            child: CircleAvatar(
-              backgroundColor: themeColor,
-              radius: 18,
-              child: const Icon(Icons.camera_alt, color: Colors.white, size: 18),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDatePicker() {
+  Widget _buildDatePicker(String label, DateTime? date, Function(DateTime) onPicked, {IconData icon = Icons.calendar_today}) {
     return InkWell(
       onTap: () async {
         final picked = await showDatePicker(
           context: context,
-          initialDate: _birthDate ?? DateTime.now(),
+          initialDate: date ?? DateTime.now(),
           firstDate: DateTime(2000),
-          lastDate: DateTime.now(),
+          lastDate: DateTime(2100),
         );
-        if (picked != null) setState(() => _birthDate = picked);
+        if (picked != null) onPicked(picked);
       },
       child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.grey[100],
-          borderRadius: BorderRadius.circular(borderRadius),
-        ),
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(borderRadius)),
         child: Row(
           children: [
-            Icon(Icons.calendar_today, color: themeColor),
+            Icon(icon, color: themeColor),
             const SizedBox(width: 12),
             Text(
-              _birthDate == null
-                  ? 'Select Birth Date'
-                  : _birthDate!.toString().split(' ')[0],
+              date == null ? 'Select $label' : DateFormat('yyyy-MM-dd').format(date),
+              style: TextStyle(color: date == null ? Colors.grey[600] : Colors.black),
             ),
           ],
         ),
       ),
     );
-  }
-
-  Widget _buildImageDisplay() {
-    if (_imageFile != null) return Image.file(_imageFile!, fit: BoxFit.cover);
-
-    if (widget.petData['petPhoto'] != null &&
-        widget.petData['petPhoto'].toString().isNotEmpty) {
-      return Image.network(widget.petData['petPhoto'], fit: BoxFit.cover);
-    }
-
-    return const Icon(Icons.pets, size: 60);
   }
 }
