@@ -195,30 +195,40 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   Future<void> _register() async {
-    final name = _nameController.text.trim();
-    final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
-    if (name.isEmpty || email.isEmpty || password.isEmpty) return;
     setState(() => _isLoading = true);
     try {
-      final res = await supabase.auth.signUp(email: email, password: password);
-      if (res.user != null) {
-        String imageUrl = 'https://example.com/default_avatar.png';
-        if (_pickedImage != null) {
-          final bytes = await _pickedImage!.readAsBytes();
-          final filePath = '${res.user!.id}/avatar.png';
-          await supabase.storage.from('user_photos').uploadBinary(filePath, bytes);
-          imageUrl = supabase.storage.from('user_photos').getPublicUrl(filePath);
-        }
+      // 1. Sign up to Supabase Auth (Creates the 'Account')
+      final AuthResponse res = await supabase.auth.signUp(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
+
+      // 2. Define 'user' so the code knows what 'user.id' is
+      final user = res.user;
+
+      if (user != null) {
+        // 3. Insert into your custom 'users' table
         await supabase.from('users').insert({
-          'userID': res.user!.id, 'userName': name, 'userEmail': email,
-          'phoneNumber': _phoneController.text.trim(), 'userPhoto': imageUrl,
-          'accountStatus': 'Active', 'role': 'User',
+          'userID': user.id,
+          'userName': _nameController.text.trim(),
+          'userEmail': _emailController.text.trim(),
+          'phoneNumber': _phoneController.text.trim(),
+          'role': 'User', // Default role
         });
-        if (mounted) Navigator.pop(context);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Registration Successful! Please Login.')),
+          );
+          Navigator.pop(context);
+        }
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Colors.red),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }

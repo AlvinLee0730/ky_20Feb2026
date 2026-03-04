@@ -23,6 +23,10 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
   final _breedController = TextEditingController();
   final _ageController = TextEditingController();
   final _remarkController = TextEditingController();
+  // --- 新增：疫苗详细资料控制器 ---
+  final _vaccineBrandController = TextEditingController();
+  final _vaccineDateController = TextEditingController();
+  final _nextDoseController = TextEditingController();
   bool _vaccinated = false;
 
   // --- Filter State ---
@@ -105,6 +109,10 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
         'remark': _remarkController.text.trim(),
         'photoURL': imageUrl,
         'isApproved': _userRole == 'Admin',
+        // --- 新增：保存疫苗资料 ---
+        'vaccineBrand': _vaccinated ? _vaccineBrandController.text.trim() : null,
+        'lastVaccinationDate': _vaccinated ? _vaccineDateController.text : null,
+        'nextDoseDate': _vaccinated ? _nextDoseController.text : null,
       };
 
       if (editId != null) {
@@ -343,8 +351,13 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
       _ageController.text = editPost['age'].toString();
       _remarkController.text = editPost['remark'] ?? "";
       _vaccinated = editPost['vaccinated'] ?? false;
+      // --- 初始化疫苗字段 ---
+      _vaccineBrandController.text = editPost['vaccineBrand'] ?? "";
+      _vaccineDateController.text = editPost['lastVaccinationDate'] ?? "";
+      _nextDoseController.text = editPost['nextDoseDate'] ?? "";
     } else {
       _petNameController.clear(); _breedController.clear(); _ageController.clear(); _remarkController.clear();
+      _vaccineBrandController.clear(); _vaccineDateController.clear(); _nextDoseController.clear();
       _vaccinated = false; _imageFile = null;
     }
 
@@ -378,7 +391,49 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
                 TextField(controller: _breedController, decoration: const InputDecoration(labelText: "Breed")),
                 TextField(controller: _ageController, decoration: const InputDecoration(labelText: "Age"), keyboardType: TextInputType.number),
                 TextField(controller: _remarkController, decoration: const InputDecoration(labelText: "Remarks")),
-                CheckboxListTile(title: const Text("Vaccinated?"), value: _vaccinated, onChanged: (v) => setModalState(() => _vaccinated = v!)),
+                CheckboxListTile(
+                    title: const Text("Vaccinated?"),
+                    value: _vaccinated,
+                    onChanged: (v) => setModalState(() => _vaccinated = v!)
+                ),
+
+                // --- 动态显示疫苗详情 ---
+                if (_vaccinated) ...[
+                  const Divider(),
+                  TextField(
+                      controller: _vaccineBrandController,
+                      decoration: const InputDecoration(labelText: "Vaccine Brand", prefixIcon: Icon(Icons.medication))
+                  ),
+                  TextField(
+                    controller: _vaccineDateController,
+                    readOnly: true,
+                    decoration: const InputDecoration(labelText: "Last Vaccination Date", prefixIcon: Icon(Icons.calendar_today)),
+                    onTap: () async {
+                      DateTime? picked = await showDatePicker(
+                        context: context,
+                        initialDate: DateTime.now(),
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime.now(),
+                      );
+                      if (picked != null) setModalState(() => _vaccineDateController.text = DateFormat('yyyy-MM-dd').format(picked));
+                    },
+                  ),
+                  TextField(
+                    controller: _nextDoseController,
+                    readOnly: true,
+                    decoration: const InputDecoration(labelText: "Next Dose Due Date", prefixIcon: Icon(Icons.event_repeat)),
+                    onTap: () async {
+                      DateTime? picked = await showDatePicker(
+                        context: context,
+                        initialDate: DateTime.now().add(const Duration(days: 30)),
+                        firstDate: DateTime.now(),
+                        lastDate: DateTime(2030),
+                      );
+                      if (picked != null) setModalState(() => _nextDoseController.text = DateFormat('yyyy-MM-dd').format(picked));
+                    },
+                  ),
+                ],
+
                 const SizedBox(height: 20),
                 _isSaving ? const CircularProgressIndicator() : SizedBox(
                   width: double.infinity,
@@ -443,7 +498,18 @@ class PetDetailPage extends StatelessWidget {
                   const Divider(height: 30),
                   _rowItem(Icons.pets, "Breed", post['breed'] ?? "Unknown"),
                   _rowItem(Icons.cake, "Age", "${post['age']} years"),
-                  _rowItem(Icons.verified_user, "Vaccinated", post['vaccinated'] ? "Yes" : "No"),
+                  _rowItem(Icons.verified_user, "Vaccinated", post['vaccinated'] == true ? "Yes" : "No"),
+
+                  // --- 新增：展示详细疫苗信息 ---
+                  if (post['vaccinated'] == true) ...[
+                    if (post['vaccineBrand'] != null && post['vaccineBrand'].toString().isNotEmpty)
+                      _rowItem(Icons.medication, "Brand", post['vaccineBrand']),
+                    if (post['lastVaccinationDate'] != null)
+                      _rowItem(Icons.calendar_today, "Last Dose", post['lastVaccinationDate']),
+                    if (post['nextDoseDate'] != null)
+                      _rowItem(Icons.event_repeat, "Next Due", post['nextDoseDate']),
+                  ],
+
                   const SizedBox(height: 20),
                   const Text("Remarks:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 5),
