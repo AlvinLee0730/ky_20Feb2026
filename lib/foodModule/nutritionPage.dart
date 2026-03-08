@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'dart:math' as math;
+import 'nutritionHistory.dart'; // 确保文件名匹配
 
 class NutritionPage extends StatefulWidget {
   final Map<String, dynamic> petData;
@@ -21,9 +22,9 @@ class _NutritionPageState extends State<NutritionPage> {
   double totalFat = 0.0;
   double totalCarbs = 0.0;
   double totalFiber = 0.0;
-  String dynamicTip = "Analyzing data...";
+  String dynamicTip = "Analyzing today's data...";
 
-  // 这里的目标会根据体重动态计算
+  // Default target if weight fetch fails
   double dailyCaloryGoal = 300;
 
   @override
@@ -32,16 +33,17 @@ class _NutritionPageState extends State<NutritionPage> {
     _refreshData();
   }
 
-  // 刷新逻辑：先拿最新体重，再拿今日营养
+  // 刷新逻辑：获取体重 -> 获取今日营养
   Future<void> _refreshData() async {
     await _updatePetWeight();
     await _fetchTodayNutrition();
   }
 
-  // 1. 从数据库获取最新体重并计算目标
+  // 1. 获取最新体重并计算每日建议热量 (RER)
   Future<void> _updatePetWeight() async {
     try {
-      final petId = widget.petData['petID'];
+      // 这里的 petID 统一当做 String 处理 (兼容 UUID)
+      final String petId = widget.petData['petID'].toString();
       final data = await supabase
           .from('pet')
           .select('weight')
@@ -51,10 +53,12 @@ class _NutritionPageState extends State<NutritionPage> {
       if (data != null && data['weight'] != null) {
         double weight = (data['weight'] as num).toDouble();
 
+        // RER Formula: 70 * (weight ^ 0.75)
         double rer = 70 * math.pow(weight, 0.75).toDouble();
 
         setState(() {
-          dailyCaloryGoal = (rer * 1.2).toDouble();
+          // MER = RER * 1.2 for normal adult maintenance
+          dailyCaloryGoal = rer * 1.2;
           if (dailyCaloryGoal < 200) dailyCaloryGoal = 300.0;
         });
       }
@@ -63,23 +67,20 @@ class _NutritionPageState extends State<NutritionPage> {
     }
   }
 
+  // 2. 从数据库获取今天的营养总和
   Future<void> _fetchTodayNutrition() async {
     setState(() => _isLoading = true);
-    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final String petId = widget.petData['petID'].toString();
 
     try {
       final response = await supabase
           .from('nutrition')
           .select()
-          .eq('petID', widget.petData['petID'])
+          .eq('petID', petId)
           .eq('date', today);
 
-      // ⭐ 明确初始化为 double 0.0
-      double cal = 0.0;
-      double pro = 0.0;
-      double fat = 0.0;
-      double carbs = 0.0;
-      double fiber = 0.0;
+      double cal = 0.0, pro = 0.0, fat = 0.0, carbs = 0.0, fib = 0.0;
 
       if (response != null) {
         for (var row in response) {
@@ -87,20 +88,32 @@ class _NutritionPageState extends State<NutritionPage> {
           pro += (row['protein'] as num? ?? 0.0).toDouble();
           fat += (row['fat'] as num? ?? 0.0).toDouble();
           carbs += (row['carbs'] as num? ?? 0.0).toDouble();
-          fiber += (row['fiber'] as num? ?? 0.0).toDouble();
+          fib += (row['fiber'] as num? ?? 0.0).toDouble();
         }
       }
 
-      // ... 剩下的 Tip 逻辑 ...
+      // Generate Dynamic English Tips
+      String tip = "Your pet's diet looks balanced today!";
+      if (cal == 0) {
+        tip = "No meals recorded today. Time to log some food!";
+      } else if (cal > dailyCaloryGoal) {
+        tip = "Calories exceed the daily goal. Maybe a longer walk?";
+      } else if (pro < 10 && cal > 0) {
+        tip = "Protein levels are low. Consider high-protein treats.";
+      }
+
       setState(() {
         totalCal = cal;
         totalProtein = pro;
         totalFat = fat;
         totalCarbs = carbs;
-        totalFiber = fiber;
+        totalFiber = fib;
+        dynamicTip = tip;
       });
+
     } catch (e) {
       debugPrint("Fetch Error: $e");
+      setState(() => dynamicTip = "Failed to load health tips.");
     } finally {
       setState(() => _isLoading = false);
     }
@@ -114,10 +127,27 @@ class _NutritionPageState extends State<NutritionPage> {
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: Text("${widget.petData['petName']}'s Health Analysis"),
+        title: Text("${widget.petData['petName']}'s Health"),
         backgroundColor: themeColor,
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history_rounded),
+            tooltip: "History",
+            onPressed: () {
+              // 关键修复：直接传递 String，不再 parse int
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => NutritionHistoryPage(
+                    petID: widget.petData['petID'].toString(),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: _isLoading
           ? Center(child: CircularProgressIndicator(color: themeColor))
@@ -134,7 +164,7 @@ class _NutritionPageState extends State<NutritionPage> {
               const SizedBox(height: 30),
               const Align(
                 alignment: Alignment.centerLeft,
-                child: Text("Nutrient Breakdown (g)",
+                child: Text("Nutrient Intake (g)",
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               ),
               const SizedBox(height: 15),
@@ -146,7 +176,8 @@ class _NutritionPageState extends State<NutritionPage> {
     );
   }
 
-  // --- 卡路里进度卡片 ---
+  // --- UI Components (English) ---
+
   Widget _buildMainCard(double progress, bool isOver) {
     return Container(
       width: double.infinity,
@@ -158,7 +189,7 @@ class _NutritionPageState extends State<NutritionPage> {
       ),
       child: Column(
         children: [
-          const Text("Daily Calorie Progress", style: TextStyle(color: Colors.grey, fontSize: 16)),
+          const Text("Daily Calorie Intake", style: TextStyle(color: Colors.grey, fontSize: 16)),
           const SizedBox(height: 10),
           Text(
             "${totalCal.toStringAsFixed(1)} / ${dailyCaloryGoal.toStringAsFixed(0)} kcal",
@@ -176,7 +207,7 @@ class _NutritionPageState extends State<NutritionPage> {
                 decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(10)),
               ),
               FractionallySizedBox(
-                widthFactor: progress > 1 ? 1 : progress,
+                widthFactor: progress > 1 ? 1 : (progress < 0 ? 0 : progress),
                 child: Container(
                   height: 14,
                   decoration: BoxDecoration(
@@ -191,7 +222,7 @@ class _NutritionPageState extends State<NutritionPage> {
           ),
           const SizedBox(height: 12),
           Text(
-            isOver ? "Limit Exceeded!" : "${(progress * 100).toStringAsFixed(0)}% of daily goal",
+            isOver ? "Over the limit!" : "${(progress * 100).toStringAsFixed(0)}% reached",
             style: TextStyle(color: isOver ? Colors.red : Colors.grey[600], fontWeight: FontWeight.w600),
           ),
         ],
@@ -199,7 +230,6 @@ class _NutritionPageState extends State<NutritionPage> {
     );
   }
 
-  // --- 智能建议卡片 ---
   Widget _buildTipCard(bool isOver) {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -227,7 +257,6 @@ class _NutritionPageState extends State<NutritionPage> {
     );
   }
 
-  // --- 营养网格 ---
   Widget _buildNutrientGrid() {
     return GridView.count(
       shrinkWrap: true,

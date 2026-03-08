@@ -131,7 +131,7 @@ class _AddFoodPageState extends State<AddFoodPage> {
               // 食物库选择 (关键修复)
               DropdownButtonFormField<Map<String, dynamic>>(
                 value: _selectedLibraryItem,
-                decoration: const InputDecoration(labelText: "Select Food (from Library)", border: OutlineInputBorder()),
+                decoration: const InputDecoration(labelText: "Select Food", border: OutlineInputBorder()),
                 items: _libraryItems.map((item) {
                   return DropdownMenuItem(
                     value: item,
