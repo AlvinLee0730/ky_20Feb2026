@@ -2,7 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:intl/intl.dart'; // 记得添加这个 package 用于格式化日期
+import 'package:intl/intl.dart';
+import 'package:newfypken/notification_service.dart';
 
 final supabase = Supabase.instance.client;
 
@@ -21,11 +22,9 @@ class _CreatePetPageState extends State<CreatePetPage> {
   final _species = TextEditingController();
   final _breed = TextEditingController();
   final _remarks = TextEditingController();
-  // ⭐ 新增 weight controller
   final _weight = TextEditingController();
 
   DateTime? _birthDate;
-  // ⭐ 新增疫苗过期日期变量
   DateTime? _vaccinationExpiry;
 
   File? _imageFile;
@@ -52,7 +51,6 @@ class _CreatePetPageState extends State<CreatePetPage> {
     }
   }
 
-  // ================= SAVE PET =================
   Future<void> _savePet() async {
     if (_name.text.isEmpty || _birthDate == null || _gender == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -73,19 +71,31 @@ class _CreatePetPageState extends State<CreatePetPage> {
         imageUrl = supabase.storage.from('pet_photos').getPublicUrl(fileName);
       }
 
-      // ⭐ INSERT 更新字段
-      await supabase.from('pet').insert({
+      final insertResponse = await supabase.from('pet').insert({
         'petName': _name.text.trim(),
         'species': _species.text.trim(),
         'breed': _breed.text.trim(),
         'gender': _gender,
         'birthDate': _birthDate!.toIso8601String(),
-        'weight': double.tryParse(_weight.text) ?? 0.0, // ⭐ 新增 weight
-        'vaccinationExpiry': _vaccinationExpiry?.toIso8601String(), // ⭐ 新增疫苗过期日期
+        'weight': double.tryParse(_weight.text) ?? 0.0,
+        'vaccinationExpiry': _vaccinationExpiry?.toIso8601String(),
         'petPhoto': imageUrl,
         'remarks': _remarks.text.trim(),
         'userID': userId,
-      });
+      }).select('petID');
+
+      final petID = insertResponse.isNotEmpty ? insertResponse.first['petID'] : null;
+      if (petID != null && _vaccinationExpiry != null) {
+        final reminderTime = DateTime(_vaccinationExpiry!.year, _vaccinationExpiry!.month, _vaccinationExpiry!.day, 9, 0);
+        if (reminderTime.isAfter(DateTime.now())) {
+          await NotificationService.scheduleNotification(
+            id: NotificationService.petVaccineNotificationId(petID),
+            title: 'Vaccination reminder: ${_name.text.trim()}',
+            body: 'Vaccination due today. Remember to schedule the next dose.',
+            scheduledTime: reminderTime,
+          );
+        }
+      }
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -117,21 +127,16 @@ class _CreatePetPageState extends State<CreatePetPage> {
               ),
             ),
             const SizedBox(height: 30),
-
             TextField(controller: _name, decoration: _inputStyle('Pet Name', Icons.badge)),
             const SizedBox(height: 15),
-
-            // ⭐ 重量输入框
             TextField(
                 controller: _weight,
                 keyboardType: TextInputType.number,
                 decoration: _inputStyle('Weight (kg)', Icons.monitor_weight_outlined)
             ),
             const SizedBox(height: 15),
-
             TextField(controller: _species, decoration: _inputStyle('Species', Icons.category)),
             const SizedBox(height: 15),
-
             DropdownButtonFormField<String>(
               value: _gender,
               decoration: _inputStyle('Gender', Icons.wc),
@@ -142,8 +147,6 @@ class _CreatePetPageState extends State<CreatePetPage> {
               onChanged: (value) => setState(() => _gender = value),
             ),
             const SizedBox(height: 15),
-
-            // 出生日期
             ListTile(
               tileColor: Colors.grey[100],
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
@@ -160,10 +163,8 @@ class _CreatePetPageState extends State<CreatePetPage> {
               },
             ),
             const SizedBox(height: 15),
-
-            // ⭐⭐⭐ 疫苗过期日期选择器 ⭐⭐⭐
             ListTile(
-              tileColor: Colors.teal[50], // 换个颜色区分一下
+              tileColor: Colors.teal[50],
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
               leading: Icon(Icons.vaccines, color: themeColor),
               title: Text(
@@ -175,18 +176,16 @@ class _CreatePetPageState extends State<CreatePetPage> {
               onTap: () async {
                 final picked = await showDatePicker(
                   context: context,
-                  initialDate: DateTime.now().add(const Duration(days: 365)), // 默认显示一年后
-                  firstDate: DateTime.now().subtract(const Duration(days: 365)), // 也可以选去年的
+                  initialDate: DateTime.now().add(const Duration(days: 365)),
+                  firstDate: DateTime.now().subtract(const Duration(days: 365)),
                   lastDate: DateTime(2100),
                 );
                 if (picked != null) setState(() => _vaccinationExpiry = picked);
               },
             ),
-
             const SizedBox(height: 15),
             TextField(controller: _remarks, maxLines: 2, decoration: _inputStyle('Remarks', Icons.description)),
             const SizedBox(height: 40),
-
             _loading
                 ? CircularProgressIndicator(color: themeColor)
                 : ElevatedButton(
@@ -205,3 +204,4 @@ class _CreatePetPageState extends State<CreatePetPage> {
     );
   }
 }
+
