@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:newfypken/notification_service.dart';
 
 final supabase = Supabase.instance.client;
 
@@ -34,13 +35,11 @@ class _EditPetPageState extends State<EditPetPage> {
   @override
   void initState() {
     super.initState();
-    // 初始化数据
     _name = TextEditingController(text: widget.petData['petName'] ?? '');
     _species = TextEditingController(text: widget.petData['species'] ?? '');
     _breed = TextEditingController(text: widget.petData['breed'] ?? '');
     _remarks = TextEditingController(text: widget.petData['remarks'] ?? '');
     _weight = TextEditingController(text: widget.petData['weight']?.toString() ?? '');
-
     _birthDate = DateTime.tryParse(widget.petData['birthDate'] ?? '');
     _vaccinationExpiry = DateTime.tryParse(widget.petData['vaccinationExpiry'] ?? '');
     _gender = widget.petData['gender'];
@@ -56,7 +55,6 @@ class _EditPetPageState extends State<EditPetPage> {
     super.dispose();
   }
 
-  // --- 辅助样式 ---
   InputDecoration _inputStyle(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
@@ -71,13 +69,11 @@ class _EditPetPageState extends State<EditPetPage> {
     );
   }
 
-  // --- 选择图片 ---
   Future<void> _pickImage() async {
     final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 70);
     if (picked != null) setState(() => _imageFile = File(picked.path));
   }
 
-  // --- 上传图片 ---
   Future<String?> _uploadImage() async {
     if (_imageFile == null) return widget.petData['petPhoto'];
     try {
@@ -90,12 +86,12 @@ class _EditPetPageState extends State<EditPetPage> {
     }
   }
 
-  // --- 更新逻辑 ---
   Future<void> _updatePet() async {
     setState(() => _loading = true);
     try {
       final imageUrl = await _uploadImage();
       final userId = supabase.auth.currentUser!.id;
+      final petID = widget.petData['petID'];
 
       await supabase.from('pet').update({
         'petName': _name.text.trim(),
@@ -107,7 +103,20 @@ class _EditPetPageState extends State<EditPetPage> {
         'vaccinationExpiry': _vaccinationExpiry?.toIso8601String(),
         'petPhoto': imageUrl,
         'remarks': _remarks.text.trim(),
-      }).eq('petID', widget.petData['petID']).eq('userID', userId);
+      }).eq('petID', petID).eq('userID', userId);
+
+      await NotificationService.cancelNotification(NotificationService.petVaccineNotificationId(petID));
+      if (_vaccinationExpiry != null) {
+        final reminderTime = DateTime(_vaccinationExpiry!.year, _vaccinationExpiry!.month, _vaccinationExpiry!.day, 9, 0);
+        if (reminderTime.isAfter(DateTime.now())) {
+          await NotificationService.scheduleNotification(
+            id: NotificationService.petVaccineNotificationId(petID),
+            title: 'Vaccination reminder: ${_name.text.trim()}',
+            body: 'Vaccination due today. Remember to schedule the next dose.',
+            scheduledTime: reminderTime,
+          );
+        }
+      }
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -117,7 +126,6 @@ class _EditPetPageState extends State<EditPetPage> {
     }
   }
 
-  // --- 删除逻辑 ---
   Future<void> _deletePet() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -134,7 +142,9 @@ class _EditPetPageState extends State<EditPetPage> {
     if (confirm == true) {
       setState(() => _loading = true);
       try {
-        await supabase.from('pet').delete().eq('petID', widget.petData['petID']);
+        final petID = widget.petData['petID'];
+        await NotificationService.cancelNotification(NotificationService.petVaccineNotificationId(petID));
+        await supabase.from('pet').delete().eq('petID', petID);
         if (mounted) Navigator.pop(context, true);
       } catch (e) {
         debugPrint("Delete error: $e");
@@ -162,7 +172,6 @@ class _EditPetPageState extends State<EditPetPage> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // 头像部分
             GestureDetector(
               onTap: _pickImage,
               child: CircleAvatar(
@@ -177,7 +186,6 @@ class _EditPetPageState extends State<EditPetPage> {
               ),
             ),
             const SizedBox(height: 30),
-
             TextField(controller: _name, decoration: _inputStyle('Pet Name', Icons.badge)),
             const SizedBox(height: 15),
             TextField(controller: _weight, keyboardType: TextInputType.number, decoration: _inputStyle('Weight (kg)', Icons.monitor_weight)),
@@ -186,7 +194,6 @@ class _EditPetPageState extends State<EditPetPage> {
             const SizedBox(height: 15),
             TextField(controller: _breed, decoration: _inputStyle('Breed', Icons.pets)),
             const SizedBox(height: 15),
-
             DropdownButtonFormField<String>(
               value: _gender,
               decoration: _inputStyle('Gender', Icons.wc),
@@ -197,15 +204,12 @@ class _EditPetPageState extends State<EditPetPage> {
               onChanged: (value) => setState(() => _gender = value),
             ),
             const SizedBox(height: 15),
-
             _buildDatePicker("Birth Date", _birthDate, (date) => setState(() => _birthDate = date)),
             const SizedBox(height: 15),
             _buildDatePicker("Vaccination Expiry", _vaccinationExpiry, (date) => setState(() => _vaccinationExpiry = date), icon: Icons.vaccines),
             const SizedBox(height: 15),
-
             TextField(controller: _remarks, maxLines: 3, decoration: _inputStyle('Remarks', Icons.description)),
             const SizedBox(height: 30),
-
             ElevatedButton(
               onPressed: _updatePet,
               style: ElevatedButton.styleFrom(

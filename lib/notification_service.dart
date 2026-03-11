@@ -23,7 +23,7 @@ class NotificationService {
     );
   }
 
-  // 1. 安排通知
+  // 安排通知：在 scheduledTime 到达时提醒；Daily/Weekly/Monthly 为重复提醒（每天/每周/每月同一时间）
   static Future<void> scheduleNotification({
     required int id,
     required String title,
@@ -32,21 +32,36 @@ class NotificationService {
     String repeatType = 'None',
   }) async {
     try {
-      // 1. 直接获取当前本地时间，往后加 10 秒
       final now = DateTime.now();
-      final testTime = now.add(const Duration(seconds: 10));
+      if (repeatType == 'None' && scheduledTime.isBefore(now)) {
+        print("⏰ 日程时间已过，跳过通知: $scheduledTime");
+        return;
+      }
 
-      // 2. ⭐ 关键修复：强制使用 UTC 格式但填入本地数值
-      // 这样插件就会在本地时钟走到这个点时直接触发，不经过时区转换
       final tz.TZDateTime tzTime = tz.TZDateTime(
-        tz.UTC, // 强制声明为 UTC，避免被时区库二次转换
-        testTime.year,
-        testTime.month,
-        testTime.day,
-        testTime.hour,
-        testTime.minute,
-        testTime.second,
+        tz.UTC,
+        scheduledTime.year,
+        scheduledTime.month,
+        scheduledTime.day,
+        scheduledTime.hour,
+        scheduledTime.minute,
+        scheduledTime.second,
       );
+
+      DateTimeComponents? matchComponents;
+      switch (repeatType) {
+        case 'Daily':
+          matchComponents = DateTimeComponents.time;
+          break;
+        case 'Weekly':
+          matchComponents = DateTimeComponents.dayOfWeekAndTime;
+          break;
+        case 'Monthly':
+          matchComponents = DateTimeComponents.dayOfMonthAndTime;
+          break;
+        default:
+          matchComponents = null;
+      }
 
       await _notificationsPlugin.zonedSchedule(
         id,
@@ -67,15 +82,40 @@ class NotificationService {
         uiLocalNotificationDateInterpretation:
         UILocalNotificationDateInterpretation.absoluteTime,
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        matchDateTimeComponents: matchComponents,
       );
 
-      print("🎯 最终强制触发时间: $tzTime");
+      if (repeatType == 'None') {
+        print("🎯 已安排单次提醒，触发时间: $scheduledTime");
+      } else {
+        print("🎯 已安排重复提醒 ($repeatType)，基准时间: $scheduledTime");
+      }
     } catch (e) {
       print("❌ 安排通知失败: $e");
     }
   }
-  // 2. ⭐ 补上这个缺失的方法
   static Future<void> cancelNotification(int id) async {
     await _notificationsPlugin.cancel(id);
+  }
+
+  /// Pet 疫苗提醒使用独立 id 区间，避免与 schedule 的 id 冲突
+  static int petVaccineNotificationId(dynamic petID) {
+    final id = int.tryParse(petID.toString());
+    if (id != null) return 500000 + (id % 500000);
+    return 500000 + (petID.hashCode.abs() % 500000);
+  }
+
+  /// Test: sends a notification in ~10 seconds. Use to verify notifications work.
+  static Future<void> scheduleTestNotification() async {
+    const testId = 888888;
+    final in10Sec = DateTime.now().add(const Duration(seconds: 10));
+    await scheduleNotification(
+      id: testId,
+      title: 'Test notification',
+      body: 'If you see this, notifications are working! (sent 10 sec after tap)',
+      scheduledTime: in10Sec,
+      repeatType: 'None',
+    );
+    print("Test notification scheduled: will show in ~10 seconds");
   }
 }

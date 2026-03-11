@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart' as loc;
 import 'package:geocoding/geocoding.dart';
-import 'package:newfypken/notification_service.dart'; // 导入通知服务
+// 💡 保持和 Create 页面一致的别名
+import 'package:google_place/google_place.dart' as gp;
+import 'package:newfypken/notification_service.dart';
 
 final supabase = Supabase.instance.client;
 
@@ -17,14 +18,13 @@ class EditSchedulePage extends StatefulWidget {
 }
 
 class _EditSchedulePageState extends State<EditSchedulePage> {
-  // --- 样式规范 ---
   final Color themeColor = Colors.teal;
   final double borderRadius = 15.0;
 
   String? _selectedType;
   String? _selectedTitle;
+  String _repeatType = 'None';
   final _descController = TextEditingController();
-  String _selectedRepeat = 'None';
 
   DateTime? _selectedDate;
   TimeOfDay? _startTime;
@@ -33,6 +33,10 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
   bool _isLoading = false;
   bool _isLocating = false;
   LatLng? _pickedLocation;
+
+  // 💡 引入 Google Place
+  final String googleApiKey = "AIzaSyCl8hgw0K7-gpdCFdEJQfBKR22CfDverA0"; // <-- 记得放你的 Key
+  late gp.GooglePlace googlePlace;
 
   final Map<String, List<String>> scheduleTypeToTitle = {
     'Activity': ['Feed', 'Walk', 'Play Ball', 'Training'],
@@ -43,12 +47,14 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
   @override
   void initState() {
     super.initState();
-    // 初始化已有数据
+    // 初始化 Google Place
+    googlePlace = gp.GooglePlace(googleApiKey);
+
+    // 填充旧数据
     _selectedType = widget.schedule['scheduleType'];
     _selectedTitle = widget.schedule['title'];
     _descController.text = widget.schedule['description'] ?? '';
-    _selectedRepeat = widget.schedule['repeatType'] ?? 'None';
-
+    _repeatType = widget.schedule['repeatType'] ?? 'None';
     _selectedDate = DateTime.tryParse(widget.schedule['date'] ?? '');
     _startTime = _parseTime(widget.schedule['startTime']);
     _endTime = _parseTime(widget.schedule['endTime']);
@@ -61,73 +67,55 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
     return TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
   }
 
-  InputDecoration _inputDecoration(String label, IconData icon) {
-    return InputDecoration(
-      labelText: label,
-      prefixIcon: Icon(icon, color: themeColor),
-      filled: true,
-      fillColor: Colors.grey[100],
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(borderRadius),
-        borderSide: BorderSide.none,
-      ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    );
-  }
-
-  // --- 地图选址逻辑 ---
-  Future<void> _showOSMPicker() async {
+  // 💡 升级后的医院选择逻辑 (同步 Create 页面)
+  Future<void> _showHospitalPicker() async {
     setState(() => _isLocating = true);
     try {
       loc.Location location = loc.Location();
-      loc.LocationData locationData = await location.getLocation();
-      LatLng currentLatLng = LatLng(locationData.latitude!, locationData.longitude!);
+      loc.LocationData locData = await location.getLocation();
+      LatLng currentLocation = LatLng(locData.latitude!, locData.longitude!);
 
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: const Text("Update Medical Location"),
+      // 搜索附近宠物医院
+      var result = await googlePlace.search.getNearBySearch(
+        gp.Location(lat: currentLocation.latitude, lng: currentLocation.longitude),
+        5000,
+        type: 'veterinary_care',
+      );
+
+      if (result != null && result.results != null && result.results!.isNotEmpty) {
+        String? selectedHospital;
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text("Select Hospital"),
             content: SizedBox(
               width: double.maxFinite,
-              height: 400,
-              child: FlutterMap(
-                options: MapOptions(
-                  initialCenter: currentLatLng,
-                  initialZoom: 15,
-                  onTap: (tapPosition, point) async {
-                    setDialogState(() => _pickedLocation = point);
-                    try {
-                      List<Placemark> placemarks = await placemarkFromCoordinates(
-                          point.latitude, point.longitude);
-                      if (placemarks.isNotEmpty) {
-                        Placemark place = placemarks.first;
-                        _descController.text = "Hospital: ${place.name}, ${place.street}, ${place.locality}";
-                      }
-                    } catch (e) {
-                      _descController.text = "Lat: ${point.latitude}, Lng: ${point.longitude}";
-                    }
-                    Future.delayed(const Duration(milliseconds: 500), () => Navigator.pop(context));
-                  },
-                ),
-                children: [
-                  TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'),
-                  if (_pickedLocation != null)
-                    MarkerLayer(
-                      markers: [
-                        Marker(
-                          point: _pickedLocation!,
-                          child: const Icon(Icons.location_on, color: Colors.red, size: 40),
-                        ),
-                      ],
-                    ),
-                ],
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: result.results!.length,
+                itemBuilder: (context, index) {
+                  final r = result.results![index];
+                  final name = r.name ?? "Unknown";
+                  final address = r.vicinity ?? "-";
+                  return ListTile(
+                    title: Text(name),
+                    subtitle: Text(address),
+                    onTap: () {
+                      selectedHospital = "$name, $address";
+                      Navigator.pop(ctx);
+                    },
+                  );
+                },
               ),
             ),
           ),
-        ),
-      );
+        );
+        if (selectedHospital != null) {
+          _descController.text = "Hospital: $selectedHospital";
+        }
+      } else {
+        await _showMapPicker(currentLocation);
+      }
     } catch (e) {
       debugPrint("Location Error: $e");
     } finally {
@@ -135,84 +123,117 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
     }
   }
 
+  // 💡 手动地图选择
+  Future<void> _showMapPicker(LatLng initialLocation) async {
+    LatLng? picked;
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Pick Location on Map"),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: GoogleMap(
+            initialCameraPosition: CameraPosition(target: initialLocation, zoom: 15),
+            onTap: (LatLng pos) {
+              picked = pos;
+            },
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+          ElevatedButton(
+            onPressed: () {
+              if (picked != null) {
+                _pickedLocation = picked;
+                _descController.text = "Lat: ${picked!.latitude}, Lng: ${picked!.longitude}";
+              }
+              Navigator.pop(ctx);
+            },
+            child: const Text("Select"),
+          )
+        ],
+      ),
+    );
+  }
+
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate ?? DateTime.now(),
-      firstDate: DateTime.now().subtract(const Duration(days: 365)),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
-    );
+        context: context,
+        initialDate: _selectedDate ?? DateTime.now(),
+        firstDate: DateTime.now(),
+        lastDate: DateTime.now().add(const Duration(days: 365)));
     if (picked != null) setState(() => _selectedDate = picked);
   }
 
   Future<void> _pickTime(bool isStart) async {
     final picked = await showTimePicker(
-      context: context,
-      initialTime: isStart ? (_startTime ?? TimeOfDay.now()) : (_endTime ?? TimeOfDay.now()),
-    );
+        context: context,
+        initialTime: isStart
+            ? (_startTime ?? TimeOfDay.now())
+            : (_endTime ?? (_startTime ?? TimeOfDay.now())));
     if (picked != null) setState(() => isStart ? _startTime = picked : _endTime = picked);
   }
 
-  // ⭐ 修改核心：更新数据库并重设通知
   Future<void> _editSchedule() async {
-    if (_selectedType == null || _selectedTitle == null || _selectedDate == null || _startTime == null) {
+    if (_selectedType == null || _selectedTitle == null || _selectedDate == null || _startTime == null || _endTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Missing fields')));
       return;
     }
+
     setState(() => _isLoading = true);
     try {
-      final dateString = "${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2,'0')}-${_selectedDate!.day.toString().padLeft(2,'0')}";
-      final startTimeString = "${_startTime!.hour.toString().padLeft(2,'0')}:${_startTime!.minute.toString().padLeft(2,'0')}:00";
+      final dateStr = "${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2,'0')}-${_selectedDate!.day.toString().padLeft(2,'0')}";
+      final startStr = "${_startTime!.hour.toString().padLeft(2,'0')}:${_startTime!.minute.toString().padLeft(2,'0')}:00";
+      final endStr = "${_endTime!.hour.toString().padLeft(2,'0')}:${_endTime!.minute.toString().padLeft(2,'0')}:00";
 
-      // 1. 更新数据库
       await supabase.from('schedule').update({
         'scheduleType': _selectedType,
         'title': _selectedTitle,
         'description': _descController.text.trim(),
-        'date': dateString,
-        'startTime': startTimeString,
-        'repeatType': _selectedRepeat,
+        'date': dateStr,
+        'startTime': startStr,
+        'endTime': endStr,
+        'repeatType': _repeatType,
       }).eq('scheduleID', widget.schedule['scheduleID']);
 
-      // 2. ⭐ 通知逻辑：先取消旧的，再设新的
-      // 我们使用 scheduleID 作为通知 ID（确保它是 int 类型），这样就能精准找到并覆盖
+      // 处理通知
       int notifId = int.tryParse(widget.schedule['scheduleID'].toString()) ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
-
-      // 先取消旧的提醒
       await NotificationService.cancelNotification(notifId);
 
-      // 设定新的提醒时间
-      final newScheduleTime = DateTime(
-        _selectedDate!.year, _selectedDate!.month, _selectedDate!.day,
-        _startTime!.hour, _startTime!.minute,
-      );
+      final scheduleTime = DateTime(_selectedDate!.year, _selectedDate!.month, _selectedDate!.day, _startTime!.hour, _startTime!.minute);
+      final reminderTime = scheduleTime.subtract(const Duration(minutes: 1));
 
-      // 重新安排通知
       await NotificationService.scheduleNotification(
         id: notifId,
-        title: "Updated Task: $_selectedTitle",
-        body: "$_selectedTitle for your pet",
-        scheduledTime: newScheduleTime,
-        repeatType: _selectedRepeat,
+        title: "Reminder: $_selectedTitle",
+        body: "Starts in 1 minute! Time for your pet's task.",
+        scheduledTime: reminderTime,
+        repeatType: _repeatType,
       );
 
-      Navigator.pop(context, true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Changes saved!')));
+        Navigator.pop(context, true);
+      }
     } catch (e) {
       debugPrint("Update Error: $e");
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
+
+  InputDecoration _inputDecoration(String label, IconData icon) => InputDecoration(
+      labelText: label,
+      prefixIcon: Icon(icon, color: themeColor),
+      filled: true,
+      fillColor: Colors.grey[100],
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(borderRadius), borderSide: BorderSide.none));
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Edit Schedule'),
-        backgroundColor: themeColor,
-        foregroundColor: Colors.white,
-        elevation: 0,
-      ),
+      appBar: AppBar(title: const Text('Edit Schedule'), backgroundColor: themeColor, foregroundColor: Colors.white),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -220,11 +241,10 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
             DropdownButtonFormField<String>(
               value: _selectedType,
               decoration: _inputDecoration('Schedule Type', Icons.category),
-              items: scheduleTypeToTitle.keys.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+              items: scheduleTypeToTitle.keys.map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
               onChanged: (val) => setState(() { _selectedType = val; _selectedTitle = null; }),
             ),
             const SizedBox(height: 16),
-
             if (_selectedType != null) ...[
               DropdownButtonFormField<String>(
                 value: _selectedTitle,
@@ -233,79 +253,60 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
                 onChanged: (val) => setState(() => _selectedTitle = val),
               ),
               const SizedBox(height: 16),
-
               if (_selectedType == 'Medical') ...[
-                InkWell(
-                  onTap: _isLocating ? null : _showOSMPicker,
-                  child: Container(
-                    padding: const EdgeInsets.all(15),
-                    decoration: BoxDecoration(
-                      color: Colors.red[50],
-                      borderRadius: BorderRadius.circular(borderRadius),
-                      border: Border.all(color: Colors.red[200]!),
-                    ),
-                    child: Row(
-                      children: [
-                        _isLocating
-                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                            : Icon(Icons.local_hospital, color: Colors.red[700]),
-                        const SizedBox(width: 12),
-                        const Expanded(child: Text("Update Hospital Location", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.redAccent))),
-                        const Icon(Icons.gps_fixed, size: 18, color: Colors.redAccent),
-                      ],
-                    ),
-                  ),
+                ElevatedButton.icon(
+                  onPressed: _isLocating ? null : _showHospitalPicker, // 💡 调用升级后的函数
+                  icon: const Icon(Icons.map),
+                  label: Text(_isLocating ? "Locating..." : "Pick Hospital Location"),
+                  style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
                 ),
                 const SizedBox(height: 16),
               ],
             ],
-
             TextField(
               controller: _descController,
               maxLines: 2,
               decoration: _inputDecoration('Description', Icons.description),
             ),
             const SizedBox(height: 16),
-
             DropdownButtonFormField<String>(
-              value: _selectedRepeat,
+              value: _repeatType,
               decoration: _inputDecoration('Repeat', Icons.repeat),
               items: ['None', 'Daily', 'Weekly', 'Monthly'].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-              onChanged: (val) => setState(() => _selectedRepeat = val!),
+              onChanged: (val) => setState(() => _repeatType = val!),
             ),
-            const SizedBox(height: 24),
-
-            Container(
-              decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(borderRadius)),
-              child: Column(
-                children: [
-                  ListTile(
-                    leading: Icon(Icons.calendar_month, color: themeColor),
-                    title: Text(_selectedDate == null ? 'Select Date' : "${_selectedDate!.toLocal()}".split(' ')[0]),
-                    onTap: _pickDate,
-                  ),
-                  const Divider(height: 1, indent: 50),
-                  ListTile(
-                    leading: Icon(Icons.access_time, color: themeColor),
-                    title: Text(_startTime == null ? 'Set Start' : "Starts at ${_startTime!.format(context)}"),
-                    onTap: () => _pickTime(true),
-                  ),
-                ],
-              ),
+            const SizedBox(height: 20),
+            // 日期和时间选择列表保持一致样式
+            ListTile(
+              tileColor: Colors.grey[100],
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              leading: const Icon(Icons.calendar_today),
+              title: Text(_selectedDate == null ? "Pick Date" : _selectedDate.toString().split(' ')[0]),
+              onTap: _pickDate,
             ),
-            const SizedBox(height: 40),
-
+            const SizedBox(height: 10),
+            ListTile(
+              tileColor: Colors.grey[100],
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              leading: const Icon(Icons.access_time),
+              title: Text(_startTime == null ? "Pick Start Time" : _startTime!.format(context)),
+              onTap: () => _pickTime(true),
+            ),
+            const SizedBox(height: 10),
+            ListTile(
+              tileColor: Colors.grey[100],
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              leading: const Icon(Icons.access_time_filled),
+              title: Text(_endTime == null ? "Pick End Time" : _endTime!.format(context)),
+              onTap: () => _pickTime(false),
+            ),
+            const SizedBox(height: 30),
             _isLoading
                 ? const CircularProgressIndicator()
                 : ElevatedButton(
               onPressed: _editSchedule,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: themeColor,
-                foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 55),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
-              ),
-              child: const Text('SAVE CHANGES', style: TextStyle(fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(backgroundColor: themeColor, minimumSize: const Size(double.infinity, 55)),
+              child: const Text("SAVE CHANGES", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ],
         ),
