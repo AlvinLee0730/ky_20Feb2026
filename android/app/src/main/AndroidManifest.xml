@@ -16,6 +16,8 @@
         android:label="newfypken"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        android:allowBackup="true"
+        android:usesCleartextTraffic="true"
 
         <activity
             android:name=".MainActivity"
@@ -45,7 +47,24 @@
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyCl8hgw0K7-gpdCFdEJQfBKR22CfDverA0"/>
 
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
+            android:exported="false"/>
+
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
+            android:exported="false">
+
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+
+        </receiver>
+
     </application>
+
+
 
     <queries>
         <intent>
