@@ -55,10 +55,9 @@ class _LoginPageState extends State<LoginPage> {
     if (_isLoading) return;
 
     if (_emailErrorText != null || _passwordErrorText != null) {
-      setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please fix the errors above'),
+          content: Text('Please fix the errors before login'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -81,16 +80,12 @@ class _LoginPageState extends State<LoginPage> {
       }
     } on AuthException catch (e) {
       String msg = 'Login failed';
-
       if (e.message.contains('Invalid login credentials')) {
         msg = 'Incorrect email or password';
       } else if (e.message.contains('network') ||
           e.message.contains('connection')) {
         msg = 'Network error. Please check your internet connection';
-      } else {
-        msg += ': ${e.message}';
       }
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
@@ -130,20 +125,16 @@ class _LoginPageState extends State<LoginPage> {
 
             TextField(
               controller: _emailController,
-              decoration: _loginInputStyle('Email', Icons.email)
-                  .copyWith(errorText: _emailErrorText),
+              decoration: _loginInputStyle('Email', Icons.email),
               keyboardType: TextInputType.emailAddress,
-              onChanged: (_) => setState(() {}),
             ),
 
             const SizedBox(height: 16),
 
             TextField(
               controller: _passwordController,
-              decoration: _loginInputStyle('Password', Icons.lock)
-                  .copyWith(errorText: _passwordErrorText),
+              decoration: _loginInputStyle('Password', Icons.lock),
               obscureText: true,
-              onChanged: (_) => setState(() {}),
             ),
 
             const SizedBox(height: 24),
@@ -194,6 +185,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
+
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
 
@@ -226,44 +218,12 @@ class _RegisterPageState extends State<RegisterPage> {
     );
   }
 
-  String? get _nameErrorText {
-    final name = _nameController.text.trim();
-    if (name.isEmpty) return 'Name is required';
-    if (name.length < 3) return 'Name must be at least 3 characters';
-    if (name.length > 30) return 'Name is too long (max 30)';
-    if (RegExp(r'\d').hasMatch(name)) return 'Name cannot contain numbers';
-    return null;
-  }
-
-  String? get _emailErrorText {
-    final email = _emailController.text.trim();
-    if (email.isEmpty) return 'Email is required';
-    if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email)) {
-      return 'Please enter a valid email';
-    }
-    return null;
-  }
-
-  String? get _passwordErrorText {
-    final pw = _passwordController.text;
-    if (pw.isEmpty) return 'Password is required';
-    if (pw.length < 8) return 'Password must be at least 8 characters';
-    return null;
-  }
-
   bool get _phoneInvalid {
     final phone = _phoneController.text.trim();
     if (phone.isEmpty) return false;
-
     final clean = phone.replaceAll(RegExp(r'[\s\-]'), '');
     final regExp = RegExp(r'^(?:\+60|0)1[0-9]{1,2}[0-9]{7,8}$');
     return !regExp.hasMatch(clean);
-  }
-
-  String? get _phoneErrorText {
-    if (_phoneController.text.trim().isEmpty) return null;
-    if (_phoneInvalid) return 'Invalid Malaysian phone number';
-    return null;
   }
 
   Future<void> _pickImage() async {
@@ -276,67 +236,53 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   Future<void> _register() async {
-<<<<<<< ken
     if (_isLoading) return;
-    if (_nameErrorText != null ||
-        _emailErrorText != null ||
-        _passwordErrorText != null ||
-        _phoneInvalid) {
-      setState(() {});
+
+    // ---------- Validate inputs on submit (a+b方案) ----------
+    final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+    final phone = _phoneController.text.trim();
+
+    String? errorMsg;
+    if (name.isEmpty || name.length < 3) {
+      errorMsg = 'Name must be at least 3 characters';
+    } else if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email)) {
+      errorMsg = 'Invalid email';
+    } else if (password.length < 8) {
+      errorMsg = 'Password must be at least 8 characters';
+    } else if (phone.isNotEmpty && _phoneInvalid) {
+      errorMsg = 'Invalid Malaysian phone number';
+    }
+
+    if (errorMsg != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please fix the errors above'),
-          backgroundColor: Colors.redAccent,
-        ),
+        SnackBar(content: Text(errorMsg), backgroundColor: Colors.redAccent),
       );
       return;
     }
 
-=======
->>>>>>> master
     setState(() => _isLoading = true);
 
     try {
-<<<<<<< ken
-      final email = _emailController.text.trim().toLowerCase();
-      final password = _passwordController.text.trim();
-      final res = await supabase.auth.signUp(
-        email: email,
-        password: password,
-      );
-
+      final res = await supabase.auth.signUp(email: email.toLowerCase(), password: password);
       if (res.user == null) throw Exception('Registration failed');
 
       String imageUrl = 'https://example.com/default_avatar.png';
-
       if (_pickedImage != null) {
         final bytes = await _pickedImage!.readAsBytes();
-
-        if (bytes.lengthInBytes > 5 * 1024 * 1024) {
-          throw Exception('Image too large');
-        }
-
-        final path = _pickedImage!.path.toLowerCase();
-        if (!path.endsWith('.jpg') &&
-            !path.endsWith('.jpeg') &&
-            !path.endsWith('.png')) {
-          throw Exception('Only JPG, JPEG or PNG allowed');
-        }
-
-        final ext = path.endsWith('.png') ? 'png' : 'jpg';
+        if (bytes.lengthInBytes > 5 * 1024 * 1024) throw Exception('Image too large');
+        final ext = _pickedImage!.path.toLowerCase().endsWith('.png') ? 'png' : 'jpg';
         final filePath = '${res.user!.id}/avatar.$ext';
-
         await supabase.storage.from('user_photos').uploadBinary(filePath, bytes);
         imageUrl = supabase.storage.from('user_photos').getPublicUrl(filePath);
       }
 
       await supabase.from('users').insert({
         'userID': res.user!.id,
-        'userName': _nameController.text.trim(),
+        'userName': name,
         'userEmail': email,
-        'phoneNumber': _phoneController.text.trim().isEmpty
-            ? null
-            : _phoneController.text.trim(),
+        'phoneNumber': phone.isEmpty ? null : phone,
         'userPhoto': imageUrl,
         'accountStatus': 'Active',
         'role': 'User',
@@ -350,61 +296,19 @@ class _RegisterPageState extends State<RegisterPage> {
       }
     } on AuthException catch (e) {
       String msg = 'Registration failed';
-
-      // Supabase rate limit 或其他 Auth 错误
-      if (e.message.contains('rate limit')) {
-        msg = 'Too many requests. Please wait a few minutes and try again.';
-      } else if (e.message.contains('duplicate key') || e.message.contains('already registered')) {
-        msg = 'This email is already registered';
-      } else if (e.message.contains('weak password')) {
-        msg = 'Password is too weak';
-      } else {
-        msg += ': ${e.message}';
-      }
-
+      if (e.message.contains('rate limit')) msg = 'Too many requests. Please wait a few minutes.';
+      else if (e.message.contains('duplicate key') || e.message.contains('already registered')) msg = 'This email is already registered';
+      else if (e.message.contains('weak password')) msg = 'Password is too weak';
+      else msg += ': ${e.message}';
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
         );
-=======
-      // 1. Sign up to Supabase Auth (Creates the 'Account')
-      final AuthResponse res = await supabase.auth.signUp(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
-
-      // 2. Define 'user' so the code knows what 'user.id' is
-      final user = res.user;
-
-      if (user != null) {
-        // 3. Insert into your custom 'users' table
-        await supabase.from('users').insert({
-          'userID': user.id,
-          'userName': _nameController.text.trim(),
-          'userEmail': _emailController.text.trim(),
-          'phoneNumber': _phoneController.text.trim(),
-          'role': 'User', // Default role
-        });
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Registration Successful! Please Login.')),
-          );
-          Navigator.pop(context);
-        }
->>>>>>> master
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-<<<<<<< ken
-          SnackBar(
-            content: Text('Registration error: ${e.toString().split('\n').first}'),
-            backgroundColor: Colors.redAccent,
-          ),
-=======
-          SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Colors.red),
->>>>>>> master
+          SnackBar(content: Text('Registration error: ${e.toString().split('\n').first}'), backgroundColor: Colors.redAccent),
         );
       }
     } finally {
@@ -429,8 +333,7 @@ class _RegisterPageState extends State<RegisterPage> {
               child: CircleAvatar(
                 radius: 50,
                 backgroundColor: Colors.grey[200],
-                backgroundImage:
-                _pickedImage != null ? FileImage(File(_pickedImage!.path)) : null,
+                backgroundImage: _pickedImage != null ? FileImage(File(_pickedImage!.path)) : null,
                 child: _pickedImage == null
                     ? Icon(Icons.person, size: 50, color: themeColor)
                     : null,
@@ -439,43 +342,13 @@ class _RegisterPageState extends State<RegisterPage> {
 
             const SizedBox(height: 30),
 
-            TextField(
-              controller: _nameController,
-              decoration:
-              _regInputStyle('Name', Icons.person).copyWith(errorText: _nameErrorText),
-              onChanged: (_) => setState(() {}),
-            ),
-
+            TextField(controller: _nameController, decoration: _regInputStyle('Name', Icons.person)),
             const SizedBox(height: 16),
-
-            TextField(
-              controller: _emailController,
-              decoration:
-              _regInputStyle('Email', Icons.email).copyWith(errorText: _emailErrorText),
-              keyboardType: TextInputType.emailAddress,
-              onChanged: (_) => setState(() {}),
-            ),
-
+            TextField(controller: _emailController, decoration: _regInputStyle('Email', Icons.email), keyboardType: TextInputType.emailAddress),
             const SizedBox(height: 16),
-
-            TextField(
-              controller: _passwordController,
-              decoration:
-              _regInputStyle('Password', Icons.lock).copyWith(errorText: _passwordErrorText),
-              obscureText: true,
-              onChanged: (_) => setState(() {}),
-            ),
-
+            TextField(controller: _passwordController, decoration: _regInputStyle('Password', Icons.lock), obscureText: true),
             const SizedBox(height: 16),
-
-            TextField(
-              controller: _phoneController,
-              decoration: _regInputStyle('Phone Number', Icons.phone)
-                  .copyWith(errorText: _phoneErrorText),
-              keyboardType: TextInputType.phone,
-              onChanged: (_) => setState(() {}),
-            ),
-
+            TextField(controller: _phoneController, decoration: _regInputStyle('Phone Number', Icons.phone), keyboardType: TextInputType.phone),
             const SizedBox(height: 32),
 
             _isLoading
@@ -490,10 +363,7 @@ class _RegisterPageState extends State<RegisterPage> {
                   borderRadius: BorderRadius.circular(borderRadius),
                 ),
               ),
-              child: const Text(
-                'CREATE ACCOUNT',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              child: const Text('CREATE ACCOUNT', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         ),
