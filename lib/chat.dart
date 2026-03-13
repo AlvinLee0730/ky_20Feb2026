@@ -5,7 +5,7 @@ import 'package:intl/intl.dart';
 import 'dart:math';
 
 // ==========================================
-// 1. 聊天列表主页 (包含 Private 和 Groups 切换)
+// 1. 聊天列表主页 (加入红点展示)
 // ==========================================
 class ChatModuleList extends StatefulWidget {
   const ChatModuleList({super.key});
@@ -18,6 +18,10 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
   final _supabase = Supabase.instance.client;
   List<Map<String, dynamic>> _recentConversations = [];
   List<Map<String, dynamic>> _myGroups = [];
+
+  Map<String, int> _privateUnread = {};
+  Map<String, int> _groupUnread = {};
+
   Timer? _listTimer;
   late TabController _tabController;
 
@@ -28,7 +32,7 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _fetchData();
-    _listTimer = Timer.periodic(const Duration(seconds: 5), (timer) => _fetchData());
+    _listTimer = Timer.periodic(const Duration(seconds: 3), (timer) => _fetchData());
   }
 
   @override
@@ -41,15 +45,30 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
   Future<void> _fetchData() async {
     _fetchRecentChats();
     _fetchMyGroups();
+    _fetchUnreadCounts();
+  }
+
+  Future<void> _fetchUnreadCounts() async {
+    try {
+      final pRes = await _supabase.rpc('get_private_unread_counts', params: {'my_id': _myID});
+      final gRes = await _supabase.rpc('get_group_unread_counts', params: {'my_id': _myID});
+
+      if (mounted) {
+        setState(() {
+          _privateUnread = { for (var item in pRes) item['sender_id']: (item['unread_count'] as num).toInt() };
+          _groupUnread = { for (var item in gRes) item['group_id']: (item['unread_count'] as num).toInt() };
+        });
+      }
+    } catch (e) {
+      debugPrint("Unread Count Error: $e");
+    }
   }
 
   Future<void> _fetchRecentChats() async {
     try {
       final data = await _supabase.from('recent_chats_view').select().order('timestamp', ascending: false);
       if (mounted) setState(() => _recentConversations = List<Map<String, dynamic>>.from(data));
-    } catch (e) {
-      debugPrint("Recent Chats Error: $e");
-    }
+    } catch (e) {}
   }
 
   Future<void> _fetchMyGroups() async {
@@ -60,12 +79,9 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
           .eq('GroupMembers.userID', _myID)
           .order('createdAt', ascending: false);
       if (mounted) setState(() => _myGroups = List<Map<String, dynamic>>.from(data));
-    } catch (e) {
-      debugPrint("My Groups Error: $e");
-    }
+    } catch (e) {}
   }
 
-  // 优化：搜索用户的弹窗也改成内部显示 Error Message
   void _searchUserByEmail() async {
     final emailController = TextEditingController();
     String? errorMessage;
@@ -80,10 +96,7 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  TextField(
-                      controller: emailController,
-                      decoration: const InputDecoration(hintText: "example@gmail.com")
-                  ),
+                  TextField(controller: emailController, decoration: const InputDecoration(hintText: "example@gmail.com")),
                   if (errorMessage != null) ...[
                     const SizedBox(height: 8),
                     Text(errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
@@ -139,16 +152,9 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
-                Expanded(
-                    child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))),
-                        onPressed: _searchUserByEmail, icon: const Icon(Icons.search, size: 18), label: const Text("Search Email"))),
+                Expanded(child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))), onPressed: _searchUserByEmail, icon: const Icon(Icons.search, size: 18), label: const Text("Search Email"))),
                 const SizedBox(width: 10),
-                Expanded(
-                    child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))),
-                        onPressed: () => showDialog(context: context, builder: (_) => const CreateGroupDialog()),
-                        icon: const Icon(Icons.group_add, size: 18), label: const Text("New Group"))),
+                Expanded(child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))), onPressed: () => showDialog(context: context, builder: (_) => const CreateGroupDialog()), icon: const Icon(Icons.group_add, size: 18), label: const Text("New Group"))),
               ],
             ),
           ),
@@ -156,6 +162,7 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
             child: TabBarView(
               controller: _tabController,
               children: [
+                // 私聊列表
                 _recentConversations.isEmpty
                     ? const Center(child: Text("No recent chats. Search an email to start!", style: TextStyle(color: Colors.grey)))
                     : ListView.builder(
@@ -165,6 +172,9 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
                     final String partnerId = user['partner_id'] ?? user['userID'];
                     final String name = user['userName'] ?? 'Unknown';
                     final String? avatarUrl = user['userPhoto'];
+
+                    int unreadCount = _privateUnread[partnerId] ?? 0;
+
                     String timeString = '';
                     if (user['timestamp'] != null) {
                       try {
@@ -179,23 +189,47 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
                         child: avatarUrl == null ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)) : null,
                       ),
                       title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text(user['last_message'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.black54)),
-                      trailing: Text(timeString, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                      subtitle: Text(user['last_message'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: unreadCount > 0 ? Colors.black87 : Colors.black54, fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
+                      trailing: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(timeString, style: TextStyle(fontSize: 12, color: unreadCount > 0 ? Colors.teal : Colors.grey, fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
+                          if (unreadCount > 0)
+                            Container(
+                              margin: const EdgeInsets.only(top: 4),
+                              padding: const EdgeInsets.all(6),
+                              decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                              child: Text(unreadCount.toString(), style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                            ),
+                        ],
+                      ),
                       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: partnerId, title: name))),
                     );
                   },
                 ),
+                // 群聊列表
                 _myGroups.isEmpty
                     ? const Center(child: Text("No groups yet. Create one!", style: TextStyle(color: Colors.grey)))
                     : ListView.builder(
                   itemCount: _myGroups.length,
                   itemBuilder: (context, index) {
                     final group = _myGroups[index];
+                    final String groupId = group['chatGroupID'];
+                    int unreadCount = _groupUnread[groupId] ?? 0;
+
                     return ListTile(
                       leading: CircleAvatar(backgroundColor: Colors.orange.shade100, child: const Icon(Icons.group, color: Colors.orange)),
                       title: Text(group['groupName'] ?? 'Unnamed Group', style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: const Text("Tap to enter group chat", style: TextStyle(color: Colors.grey, fontSize: 12)),
-                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => GroupChatPage(groupID: group['chatGroupID'], groupName: group['groupName']))),
+                      subtitle: Text("Tap to enter group chat", style: TextStyle(color: unreadCount > 0 ? Colors.black87 : Colors.grey, fontSize: 12, fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
+                      trailing: unreadCount > 0
+                          ? Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                        child: Text(unreadCount.toString(), style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                      )
+                          : null,
+                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => GroupChatPage(groupID: groupId, groupName: group['groupName']))),
                     );
                   },
                 ),
@@ -209,7 +243,7 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
 }
 
 // ==========================================
-// 2. 创建群组对话框 (修复: 内部显示错误信息)
+// 2. 创建群组对话框 (建立时分配 Owner 身份)
 // ==========================================
 class CreateGroupDialog extends StatefulWidget {
   const CreateGroupDialog({super.key});
@@ -223,7 +257,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
   final _emailController = TextEditingController();
   final List<Map<String, dynamic>> _selectedUsers = [];
   bool _isLoading = false;
-  String? _errorMessage; // 专门用来存错误信息
+  String? _errorMessage;
 
   void _addEmail() async {
     final email = _emailController.text.trim();
@@ -240,7 +274,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
       final res = await _supabase.from('users').select().eq('userEmail', email).maybeSingle();
       if (res != null) {
         if (res['userID'] == _supabase.auth.currentUser!.id) {
-          setState(() => _errorMessage = "You are automatically an Admin!");
+          setState(() => _errorMessage = "You will be the Owner automatically!");
         } else {
           setState(() { _selectedUsers.add(res); _emailController.clear(); });
         }
@@ -267,7 +301,9 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
       final String groupID = "CG${Random().nextInt(99999999)}";
       final String myID = _supabase.auth.currentUser!.id;
       await _supabase.from('ChatGroup').insert({'chatGroupID': groupID, 'groupName': groupName, 'isPublic': false});
-      await _supabase.from('GroupMembers').insert({'chatGroupID': groupID, 'userID': myID, 'role': 'Admin'});
+
+      // 创建者设为 Owner
+      await _supabase.from('GroupMembers').insert({'chatGroupID': groupID, 'userID': myID, 'role': 'Owner'});
 
       final membersData = _selectedUsers.map((u) => {'chatGroupID': groupID, 'userID': u['userID'], 'role': 'Member'}).toList();
       await _supabase.from('GroupMembers').insert(membersData);
@@ -302,7 +338,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
                 )
               ],
             ),
-            // 这里显示 Error Message
             if (_errorMessage != null) ...[
               const SizedBox(height: 5),
               Text(_errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
@@ -328,7 +363,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
 }
 
 // ==========================================
-// 3. 私聊页面 (修复: SafeArea 避开手机按键)
+// 3. 私聊页面 (加入已读标记功能)
 // ==========================================
 class ChatPage extends StatefulWidget {
   final String targetUserID;
@@ -349,8 +384,12 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
+    _markAsRead();
     _loadMessages();
-    _chatTimer = Timer.periodic(const Duration(seconds: 3), (timer) => _loadMessages());
+    _chatTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      _loadMessages();
+      _markAsRead(); // 不断把对方新发来的标记为已读
+    });
   }
 
   @override
@@ -359,6 +398,16 @@ class _ChatPageState extends State<ChatPage> {
     _msgController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  // 通知数据库：把对方发给我的消息标为已读
+  Future<void> _markAsRead() async {
+    try {
+      await _supabase.rpc('mark_private_messages_read', params: {
+        'sender_id': widget.targetUserID,
+        'receiver_id': _myID
+      });
+    } catch (e) {}
   }
 
   Future<void> _loadMessages() async {
@@ -433,7 +482,6 @@ class _ChatPageState extends State<ChatPage> {
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(title: Text(widget.title), backgroundColor: Colors.teal, foregroundColor: Colors.white),
-      // 加入 SafeArea 完美避开下方虚拟按键
       body: SafeArea(
         child: Column(
           children: [
@@ -480,7 +528,6 @@ class _ChatPageState extends State<ChatPage> {
                 },
               ),
             ),
-            // 因为外层有了 SafeArea，这里不再需要 MediaQuery.padding.bottom
             Container(
               padding: const EdgeInsets.all(10), color: Colors.white,
               child: Row(
@@ -499,7 +546,7 @@ class _ChatPageState extends State<ChatPage> {
 }
 
 // ==========================================
-// 4. 群聊页面 (修复: SafeArea，及置顶消息可追踪和Unpin)
+// 4. 群聊页面 (加入已读标记功能)
 // ==========================================
 class GroupChatPage extends StatefulWidget {
   final String groupID;
@@ -522,8 +569,12 @@ class _GroupChatPageState extends State<GroupChatPage> {
   void initState() {
     super.initState();
     _checkMyRole();
+    _markAsRead();
     _loadMessages();
-    _chatTimer = Timer.periodic(const Duration(seconds: 3), (timer) => _loadMessages());
+    _chatTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      _loadMessages();
+      _markAsRead(); // 不断更新最后阅读时间
+    });
   }
 
   @override
@@ -532,6 +583,15 @@ class _GroupChatPageState extends State<GroupChatPage> {
     _msgController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _markAsRead() async {
+    try {
+      await _supabase.rpc('mark_group_messages_read', params: {
+        'group_id': widget.groupID,
+        'user_id': _myID
+      });
+    } catch (e) {}
   }
 
   Future<void> _checkMyRole() async {
@@ -559,21 +619,17 @@ class _GroupChatPageState extends State<GroupChatPage> {
   }
 
   Future<void> _togglePin(String msgID, bool currentStatus) async {
-    if (_myRole != 'Admin') {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Only Admins can unpin messages.")));
+    if (_myRole != 'Admin' && _myRole != 'Owner') {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Only Admins and Owners can pin/unpin messages.")));
       return;
     }
     await _supabase.rpc('toggle_pin_group_message', params: {'msg_id': msgID, 'group_id': widget.groupID, 'pin_status': !currentStatus});
     _loadMessages();
   }
 
-  // 滚动定位到被置顶的消息
   void _scrollToMessage(String msgID) {
-    // 寻找目标消息的索引
     final index = _messages.indexWhere((m) => m['messageID'] == msgID);
     if (index != -1) {
-      // 简单算法：因为列表是 reverse (从下往上数)，所以根据索引大约算出需要滚动的偏移量
-      // 假设每个消息大概占 80 像素高度
       final targetOffset = index * 80.0;
       _scrollController.animateTo(
         targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
@@ -622,7 +678,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
         if (value == 'pin') _togglePin(msg['messageID'], msg['isPinned'] ?? false);
       },
       itemBuilder: (context) => [
-        if (_myRole == 'Admin') PopupMenuItem(value: 'pin', child: Text(msg['isPinned'] == true ? 'Unpin Message' : 'Pin Message')),
+        if (_myRole == 'Admin' || _myRole == 'Owner') PopupMenuItem(value: 'pin', child: Text(msg['isPinned'] == true ? 'Unpin Message' : 'Pin Message')),
         if (isMe) const PopupMenuItem(value: 'edit', child: Text('Edit')),
         if (isMe) const PopupMenuItem(value: 'unsend', child: Text('Unsend (Everyone)', style: TextStyle(color: Colors.red))),
         const PopupMenuItem(value: 'delete_me', child: Text('Delete for me')),
@@ -644,11 +700,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
         title: Text(widget.groupName), backgroundColor: Colors.teal, foregroundColor: Colors.white,
         actions: [IconButton(icon: const Icon(Icons.groups), onPressed: _openGroupManage)],
       ),
-      // 加入 SafeArea 完美避开下方虚拟按键
       body: SafeArea(
         child: Column(
           children: [
-            // 置顶消息区
             if (pinnedMessages.isNotEmpty) Container(
               width: double.infinity, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), color: Colors.amber.shade100,
               child: Column(
@@ -657,13 +711,11 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   padding: const EdgeInsets.symmetric(vertical: 4.0),
                   child: Row(
                     children: [
-                      // 点击图标取消置顶 (只有 Admin 可操作)
                       GestureDetector(
                         onTap: () => _togglePin(m['messageID'], true),
                         child: const Icon(Icons.push_pin, size: 18, color: Colors.orange),
                       ),
                       const SizedBox(width: 8),
-                      // 点击文本追踪回原本的消息位置
                       Expanded(
                         child: GestureDetector(
                           onTap: () => _scrollToMessage(m['messageID']),
@@ -735,7 +787,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
 }
 
 // ==========================================
-// 5. 群组成员管理面板 (Admin 踢人/升职)
+// 5. 群组成员管理面板 (Owner/Admin 权限分级)
 // ==========================================
 class GroupManageDialog extends StatefulWidget {
   final String groupID;
@@ -765,15 +817,109 @@ class _GroupManageDialogState extends State<GroupManageDialog> {
     _fetchMembers();
   }
 
-  Future<void> _makeAdmin(String userID) async {
-    await _supabase.from('GroupMembers').update({'role': 'Admin'}).eq('chatGroupID', widget.groupID).eq('userID', userID);
+  Future<void> _changeRole(String userID, String newRole) async {
+    await _supabase.from('GroupMembers').update({'role': newRole}).eq('chatGroupID', widget.groupID).eq('userID', userID);
     _fetchMembers();
+  }
+
+  Future<void> _addMemberByEmail() async {
+    final emailController = TextEditingController();
+    String? errorMessage;
+    bool isSearching = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              title: const Text("Add New Member"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: emailController,
+                    decoration: const InputDecoration(hintText: "Enter user email"),
+                  ),
+                  if (errorMessage != null) ...[
+                    const SizedBox(height: 8),
+                    Text(errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+                  ]
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+                  onPressed: isSearching ? null : () async {
+                    setStateDialog(() { isSearching = true; errorMessage = null; });
+                    final email = emailController.text.trim();
+
+                    if (email.isEmpty) {
+                      setStateDialog(() { isSearching = false; errorMessage = "Email cannot be empty"; });
+                      return;
+                    }
+
+                    try {
+                      final res = await _supabase.from('users').select().eq('userEmail', email).maybeSingle();
+                      if (res == null) {
+                        setStateDialog(() { isSearching = false; errorMessage = "User not found in database!"; });
+                        return;
+                      }
+
+                      final newUserId = res['userID'];
+
+                      final checkGroup = await _supabase.from('GroupMembers')
+                          .select()
+                          .eq('chatGroupID', widget.groupID)
+                          .eq('userID', newUserId)
+                          .maybeSingle();
+
+                      if (checkGroup != null) {
+                        setStateDialog(() { isSearching = false; errorMessage = "User is already in the group!"; });
+                        return;
+                      }
+
+                      await _supabase.from('GroupMembers').insert({
+                        'chatGroupID': widget.groupID,
+                        'userID': newUserId,
+                        'role': 'Member',
+                      });
+
+                      if (mounted) {
+                        Navigator.pop(ctx);
+                        _fetchMembers();
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Member added successfully!")));
+                      }
+
+                    } catch (e) {
+                      setStateDialog(() { isSearching = false; errorMessage = "Error: $e"; });
+                    }
+                  },
+                  child: isSearching
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Text("Add", style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          }
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text("Group Members"),
+      title: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text("Group Members"),
+          IconButton(
+            icon: const Icon(Icons.person_add, color: Colors.teal),
+            onPressed: _addMemberByEmail,
+            tooltip: "Add Member",
+          )
+        ],
+      ),
       content: SizedBox(
         width: double.maxFinite,
         child: ListView.builder(
@@ -785,18 +931,37 @@ class _GroupManageDialogState extends State<GroupManageDialog> {
             final role = m['role'];
             final isMe = user['userID'] == _supabase.auth.currentUser!.id;
 
+            // 根据我的权限，判断能对这个成员做什么操作
+            List<PopupMenuEntry<String>> menuItems = [];
+
+            if (!isMe) {
+              if (widget.myRole == 'Owner') {
+                // Owner 可以操作 Admin 和 Member
+                if (role == 'Admin') {
+                  menuItems.add(const PopupMenuItem(value: 'demote', child: Text("Demote to Member")));
+                  menuItems.add(const PopupMenuItem(value: 'kick', child: Text("Kick User", style: TextStyle(color: Colors.red))));
+                } else if (role == 'Member') {
+                  menuItems.add(const PopupMenuItem(value: 'admin', child: Text("Make Admin")));
+                  menuItems.add(const PopupMenuItem(value: 'kick', child: Text("Kick User", style: TextStyle(color: Colors.red))));
+                }
+              } else if (widget.myRole == 'Admin') {
+                // Admin 只能踢掉 Member
+                if (role == 'Member') {
+                  menuItems.add(const PopupMenuItem(value: 'kick', child: Text("Kick User", style: TextStyle(color: Colors.red))));
+                }
+              }
+            }
+
             return ListTile(
               title: Text(user['userName'] ?? user['userEmail'], style: TextStyle(fontWeight: isMe ? FontWeight.bold : FontWeight.normal)),
-              subtitle: Text(role, style: TextStyle(color: role == 'Admin' ? Colors.orange : Colors.grey)),
-              trailing: (widget.myRole == 'Admin' && !isMe) ? PopupMenuButton<String>(
+              subtitle: Text(role, style: TextStyle(color: role == 'Owner' ? Colors.redAccent : (role == 'Admin' ? Colors.orange : Colors.grey))),
+              trailing: menuItems.isNotEmpty ? PopupMenuButton<String>(
                 onSelected: (val) {
                   if (val == 'kick') _kickUser(user['userID']);
-                  if (val == 'admin' && role != 'Admin') _makeAdmin(user['userID']);
+                  if (val == 'admin') _changeRole(user['userID'], 'Admin');
+                  if (val == 'demote') _changeRole(user['userID'], 'Member');
                 },
-                itemBuilder: (_) => [
-                  if (role != 'Admin') const PopupMenuItem(value: 'admin', child: Text("Make Admin")),
-                  const PopupMenuItem(value: 'kick', child: Text("Kick User", style: TextStyle(color: Colors.red))),
-                ],
+                itemBuilder: (_) => menuItems,
               ) : null,
             );
           },

@@ -59,6 +59,9 @@ class MainNavigation extends StatefulWidget {
 
 class _MainNavigationState extends State<MainNavigation> {
   int _selectedIndex = 2;
+  int _totalUnreadChats = 0; // 新增：全局未读聊天总数
+  Timer? _chatBadgeTimer;
+  final _supabase = Supabase.instance.client;
 
   final List<Widget> _pages = [
     const ExpenseTrackingPage(), // Index 0
@@ -67,6 +70,32 @@ class _MainNavigationState extends State<MainNavigation> {
     const PetProfilePage(),      // Index 3
     const ProfilePage(),         // Index 4
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchUnreadChats();
+    // 每隔 3 秒刷新一次全局未读消息数量
+    _chatBadgeTimer = Timer.periodic(const Duration(seconds: 3), (_) => _fetchUnreadChats());
+  }
+
+  @override
+  void dispose() {
+    _chatBadgeTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetchUnreadChats() async {
+    final user = _supabase.auth.currentUser;
+    if (user != null) {
+      try {
+        final res = await _supabase.rpc('get_total_unread_chats', params: {'user_id': user.id});
+        if (mounted) setState(() => _totalUnreadChats = (res as num).toInt());
+      } catch (e) {
+        debugPrint("Error fetching unread chats: $e");
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -82,12 +111,20 @@ class _MainNavigationState extends State<MainNavigation> {
         selectedItemColor: Colors.teal,
         unselectedItemColor: Colors.grey,
         showUnselectedLabels: true,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.account_balance_wallet), label: "Expense"),
-          BottomNavigationBarItem(icon: Icon(Icons.chat), label: "Chat"),
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
-          BottomNavigationBarItem(icon: Icon(Icons.pets), label: "Pet"),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
+        items: [
+          const BottomNavigationBarItem(icon: Icon(Icons.account_balance_wallet), label: "Expense"),
+          // Chat 图标加上了 Badge 提醒
+          BottomNavigationBarItem(
+            icon: Badge(
+              isLabelVisible: _totalUnreadChats > 0,
+              label: Text(_totalUnreadChats.toString()),
+              child: const Icon(Icons.chat),
+            ),
+            label: "Chat",
+          ),
+          const BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
+          const BottomNavigationBarItem(icon: Icon(Icons.pets), label: "Pet"),
+          const BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
         ],
       ),
     );
@@ -106,21 +143,16 @@ class _HomePageState extends State<HomePage> {
   int _adminPendingCount = 0;
   Timer? _adminBadgeTimer;
 
-  // 核心：把 Stream 提出来，保持全局唯一的 WebSocket 连接，确保实时性不中断
   late final Stream<List<Map<String, dynamic>>> _notificationStream;
 
   @override
   void initState() {
     super.initState();
-
-    // 1. 初始化实时通知流 (只需要建立一次连接，完美避免闪烁和断连)
     _notificationStream = Supabase.instance.client
         .from('system_notifications')
         .stream(primaryKey: ['id']);
 
-    // 2. 获取用户身份
     _fetchUserRole().then((_) {
-      // 如果是 Admin，开启定时器自动刷新审批数量
       if (_userRole == 'Admin') {
         _fetchAdminPendingCount();
         _adminBadgeTimer = Timer.periodic(const Duration(seconds: 5), (t) => _fetchAdminPendingCount());
@@ -146,7 +178,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // 抓取 Admin 需要审批的总数
   Future<void> _fetchAdminPendingCount() async {
     int total = 0;
     final tables = ['adoption_posts', 'lost_post', 'found_post', 'pet_material', 'forum_post'];
@@ -172,13 +203,11 @@ class _HomePageState extends State<HomePage> {
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
-          // 右上角用户通知小铃铛
           StreamBuilder<List<Map<String, dynamic>>>(
-            stream: _notificationStream, // 使用刚刚在 initState 初始化好的稳定 Stream
+            stream: _notificationStream,
             builder: (context, snapshot) {
               int unreadCount = 0;
               if (snapshot.hasData) {
-                // 在前端过滤属于当前用户且未读的通知
                 unreadCount = snapshot.data!.where((n) {
                   return n['userID'] == myID && n['isRead'] == false;
                 }).length;
@@ -237,7 +266,6 @@ class _HomePageState extends State<HomePage> {
                     const Divider(height: 30),
                     const Text("Admin Tools", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
                     const SizedBox(height: 10),
-                    // Admin Approve Posts 的 Card，附带红点
                     _buildMenuCard(
                       context, "Approve Posts", "Review pending posts", Icons.fact_check, Colors.teal, const AdminApprovalPage(),
                       trailing: _adminPendingCount > 0
@@ -295,7 +323,6 @@ class _SystemNotificationsPageState extends State<SystemNotificationsPage> {
   @override
   void initState() {
     super.initState();
-    // 同样在 initState 初始化 stream 保证稳定
     _pageNotificationStream = _supabase.from('system_notifications').stream(primaryKey: ['id']);
   }
 
@@ -316,7 +343,6 @@ class _SystemNotificationsPageState extends State<SystemNotificationsPage> {
         builder: (context, snapshot) {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
-          // 在前端过滤属于当前用户的通知，并排序
           List<Map<String, dynamic>> items = snapshot.data!
               .where((n) => n['userID'] == _myID)
               .toList();
