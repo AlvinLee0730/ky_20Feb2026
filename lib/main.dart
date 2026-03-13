@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart';
 
 // Your existing local files
 import 'lost_and_found.dart';
@@ -43,10 +45,7 @@ class PetCareApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.grey[50],
       ),
-
-      home: session != null
-          ? const MainNavigation()
-          : const LoginPage(),
+      home: session != null ? const MainNavigation() : const LoginPage(),
     );
   }
 }
@@ -65,8 +64,8 @@ class _MainNavigationState extends State<MainNavigation> {
     const ExpenseTrackingPage(), // Index 0
     const ChatModuleList(),      // Index 1
     const HomePage(),            // Index 2
-    const PetProfilePage(),           // Index 3
-    const ProfilePage(),         // Index 4 -> 从 user_profile.dart 引入
+    const PetProfilePage(),      // Index 3
+    const ProfilePage(),         // Index 4
   ];
 
   @override
@@ -104,23 +103,42 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   String _userRole = 'User';
+  int _adminPendingCount = 0;
+  Timer? _adminBadgeTimer;
+
+  // 核心：把 Stream 提出来，保持全局唯一的 WebSocket 连接，确保实时性不中断
+  late final Stream<List<Map<String, dynamic>>> _notificationStream;
 
   @override
   void initState() {
     super.initState();
-    _fetchUserRole();
 
+    // 1. 初始化实时通知流 (只需要建立一次连接，完美避免闪烁和断连)
+    _notificationStream = Supabase.instance.client
+        .from('system_notifications')
+        .stream(primaryKey: ['id']);
+
+    // 2. 获取用户身份
+    _fetchUserRole().then((_) {
+      // 如果是 Admin，开启定时器自动刷新审批数量
+      if (_userRole == 'Admin') {
+        _fetchAdminPendingCount();
+        _adminBadgeTimer = Timer.periodic(const Duration(seconds: 5), (t) => _fetchAdminPendingCount());
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _adminBadgeTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _fetchUserRole() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user != null) {
       try {
-        final data = await Supabase.instance.client
-            .from('users')
-            .select('role')
-            .eq('userID', user.id)
-            .single();
+        final data = await Supabase.instance.client.from('users').select('role').eq('userID', user.id).single();
         if (mounted) setState(() => _userRole = data['role'] ?? 'User');
       } catch (e) {
         debugPrint("Error fetching role: $e");
@@ -128,14 +146,56 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // 抓取 Admin 需要审批的总数
+  Future<void> _fetchAdminPendingCount() async {
+    int total = 0;
+    final tables = ['adoption_posts', 'lost_post', 'found_post', 'pet_material', 'forum_post'];
+    try {
+      for (var table in tables) {
+        final data = await Supabase.instance.client.from(table).select('isApproved');
+        total += data.where((item) => item['isApproved'] == false || item['isApproved'] == null).length;
+      }
+      if (mounted) setState(() => _adminPendingCount = total);
+    } catch (e) {
+      debugPrint("Error fetching admin badge count: $e");
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final myID = Supabase.instance.client.auth.currentUser?.id ?? '';
+
     return Scaffold(
       appBar: AppBar(
         title: const Text("PetCare Hub", style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          // 右上角用户通知小铃铛
+          StreamBuilder<List<Map<String, dynamic>>>(
+            stream: _notificationStream, // 使用刚刚在 initState 初始化好的稳定 Stream
+            builder: (context, snapshot) {
+              int unreadCount = 0;
+              if (snapshot.hasData) {
+                // 在前端过滤属于当前用户且未读的通知
+                unreadCount = snapshot.data!.where((n) {
+                  return n['userID'] == myID && n['isRead'] == false;
+                }).length;
+              }
+              return IconButton(
+                icon: Badge(
+                  isLabelVisible: unreadCount > 0,
+                  label: Text(unreadCount.toString()),
+                  child: const Icon(Icons.notifications),
+                ),
+                onPressed: () {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const SystemNotificationsPage()));
+                },
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -177,7 +237,16 @@ class _HomePageState extends State<HomePage> {
                     const Divider(height: 30),
                     const Text("Admin Tools", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
                     const SizedBox(height: 10),
-                    _buildMenuCard(context, "Approve Posts", "Review pending pet adoption posts", Icons.fact_check, Colors.teal, const AdminApprovalPage()),
+                    // Admin Approve Posts 的 Card，附带红点
+                    _buildMenuCard(
+                      context, "Approve Posts", "Review pending posts", Icons.fact_check, Colors.teal, const AdminApprovalPage(),
+                      trailing: _adminPendingCount > 0
+                          ? Badge(
+                        label: Text(_adminPendingCount.toString()),
+                        child: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                      )
+                          : const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                    ),
                   ]
                 ],
               ),
@@ -188,7 +257,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildMenuCard(BuildContext context, String title, String subtitle, IconData icon, Color color, Widget destination) {
+  Widget _buildMenuCard(BuildContext context, String title, String subtitle, IconData icon, Color color, Widget destination, {Widget? trailing}) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 2,
@@ -201,8 +270,105 @@ class _HomePageState extends State<HomePage> {
         ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
         subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-        trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+        trailing: trailing ?? const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => destination)),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// 全新页面：用户专属的通知中心列表
+// ==========================================
+class SystemNotificationsPage extends StatefulWidget {
+  const SystemNotificationsPage({super.key});
+
+  @override
+  State<SystemNotificationsPage> createState() => _SystemNotificationsPageState();
+}
+
+class _SystemNotificationsPageState extends State<SystemNotificationsPage> {
+  final _supabase = Supabase.instance.client;
+  String get _myID => _supabase.auth.currentUser!.id;
+  late final Stream<List<Map<String, dynamic>>> _pageNotificationStream;
+
+  @override
+  void initState() {
+    super.initState();
+    // 同样在 initState 初始化 stream 保证稳定
+    _pageNotificationStream = _supabase.from('system_notifications').stream(primaryKey: ['id']);
+  }
+
+  Future<void> _markAsRead(String id) async {
+    await _supabase.from('system_notifications').update({'isRead': true}).eq('id', id);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Notifications"),
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+      ),
+      body: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: _pageNotificationStream,
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+
+          // 在前端过滤属于当前用户的通知，并排序
+          List<Map<String, dynamic>> items = snapshot.data!
+              .where((n) => n['userID'] == _myID)
+              .toList();
+
+          items.sort((a, b) {
+            final aTime = DateTime.tryParse(a['createdAt']?.toString() ?? '') ?? DateTime.now();
+            final bTime = DateTime.tryParse(b['createdAt']?.toString() ?? '') ?? DateTime.now();
+            return bTime.compareTo(aTime);
+          });
+
+          if (items.isEmpty) return const Center(child: Text("No notifications yet.", style: TextStyle(color: Colors.grey)));
+
+          return ListView.builder(
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final notif = items[index];
+              final bool isRead = notif['isRead'] == true;
+
+              String timeString = '';
+              if (notif['createdAt'] != null) {
+                try {
+                  final date = DateTime.parse(notif['createdAt']).toLocal();
+                  timeString = DateFormat('MMM dd, hh:mm a').format(date);
+                } catch (e) {}
+              }
+
+              return ListTile(
+                tileColor: isRead ? Colors.transparent : Colors.teal.shade50,
+                leading: CircleAvatar(
+                  backgroundColor: isRead ? Colors.grey.shade200 : Colors.teal.shade100,
+                  child: Icon(
+                    notif['title'].toString().contains('Approved') ? Icons.check_circle : Icons.error,
+                    color: notif['title'].toString().contains('Approved') ? Colors.green : Colors.red,
+                  ),
+                ),
+                title: Text(notif['title'] ?? '', style: TextStyle(fontWeight: isRead ? FontWeight.normal : FontWeight.bold)),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 4),
+                    Text(notif['message'] ?? ''),
+                    const SizedBox(height: 4),
+                    Text(timeString, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                  ],
+                ),
+                onTap: () {
+                  if (!isRead) _markAsRead(notif['id']);
+                },
+              );
+            },
+          );
+        },
       ),
     );
   }

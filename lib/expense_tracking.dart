@@ -22,6 +22,10 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   DateTime? _selectedDay;
   bool _isSaving = false;
 
+  // 用于列表过滤的分类状态
+  String _filterCategory = 'All';
+  final List<String> _filterOptions = ['All', 'Pet Food', 'Pet Toy', 'Medical', 'Grooming', 'Others'];
+
   final Map<String, double> _monthlyBudgets = {};
   final double _defaultBudget = 1000.0;
 
@@ -38,10 +42,55 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     return _monthlyBudgets[key] ?? _defaultBudget;
   }
 
+  // 专属的错误提示弹窗
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.red),
+            SizedBox(width: 8),
+            Text("Error"),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("OK", style: TextStyle(color: Colors.teal)),
+          )
+        ],
+      ),
+    );
+  }
+
+  // 为每个分类固定一个颜色，用于饼图和图标
+  Color _getCategoryColor(String cat) {
+    switch (cat) {
+      case 'Pet Food': return Colors.teal;
+      case 'Medical': return Colors.redAccent;
+      case 'Pet Toy': return Colors.orange;
+      case 'Grooming': return Colors.purpleAccent;
+      case 'Others': return Colors.blueGrey;
+      default: return Colors.grey;
+    }
+  }
+
+  IconData _getCategoryIcon(String cat) {
+    switch (cat) {
+      case 'Pet Food': return Icons.restaurant;
+      case 'Pet Toy': return Icons.toys;
+      case 'Medical': return Icons.medical_services;
+      case 'Grooming': return Icons.content_cut;
+      default: return Icons.payments;
+    }
+  }
+
   // --- 高级数据分析逻辑 ---
   Map<String, dynamic> _calculateAdvancedAnalytics(List<Map<String, dynamic>> allData) {
-    // 1. 基础过滤：判断是看全月还是看某一天
-    final filteredData = allData.where((e) {
+    // 1. 日期过滤：判断是看全月还是看某一天
+    final dateFilteredData = allData.where((e) {
       DateTime d = DateTime.parse(e['date']);
       if (_selectedDay != null) {
         return d.year == _selectedDay!.year && d.month == _selectedDay!.month && d.day == _selectedDay!.day;
@@ -49,36 +98,18 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       return d.year == _focusedMonth.year && d.month == _focusedMonth.month;
     }).toList();
 
-    double focusedTotal = filteredData.fold(0, (sum, e) => sum + (e['amount'] ?? 0));
-
-    // 2. 趋势图数据构建 (X轴为日期, Y轴为金额)
-    List<FlSpot> trendSpots = [];
-    double avgSpending = 0;
-    if (_selectedDay == null) {
-      Map<int, double> dailyMap = {};
-      // 初始化当月每天为0（为了让折线更完整）
-      int daysInMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1, 0).day;
-
-      for (var e in filteredData) {
-        int day = DateTime.parse(e['date']).day;
-        dailyMap[day] = (dailyMap[day] ?? 0) + (e['amount'] ?? 0).toDouble();
-      }
-
-      List<int> sortedDays = dailyMap.keys.toList()..sort();
-      trendSpots = sortedDays.map((day) => FlSpot(day.toDouble(), dailyMap[day]!)).toList();
-
-      if (sortedDays.isNotEmpty) {
-        avgSpending = focusedTotal / sortedDays.length; // 计算有消费天数的平均值
-      }
-    }
-
-    // 3. Needs vs. Wants 逻辑
+    double focusedTotal = 0;
     double essentialTotal = 0; // 刚需：食物、医疗
     double lifestyleTotal = 0; // 弹性：玩具、美容、其他
+    Map<String, double> categoryTotals = {}; // 记录每个分类的总花费
 
-    for (var e in filteredData) {
+    for (var e in dateFilteredData) {
       String cat = e['category'];
       double amt = (e['amount'] ?? 0).toDouble();
+
+      focusedTotal += amt;
+      categoryTotals[cat] = (categoryTotals[cat] ?? 0) + amt;
+
       if (cat == 'Pet Food' || cat == 'Medical') {
         essentialTotal += amt;
       } else {
@@ -86,13 +117,18 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       }
     }
 
+    // 2. 分类过滤（仅针对下方的列表显示起效，不影响饼图）
+    final displayData = dateFilteredData.where((e) {
+      if (_filterCategory == 'All') return true;
+      return e['category'] == _filterCategory;
+    }).toList();
+
     return {
       'focusedTotal': focusedTotal,
-      'trendSpots': trendSpots,
-      'avgSpending': avgSpending,
       'essentialTotal': essentialTotal,
       'lifestyleTotal': lifestyleTotal,
-      'displayData': filteredData,
+      'categoryTotals': categoryTotals,
+      'displayData': displayData,
     };
   }
 
@@ -139,28 +175,30 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
 
           return SingleChildScrollView(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (_selectedDay != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 10),
-                    child: InputChip(
-                      label: const Text("Return to Month View"),
-                      onPressed: () => setState(() => _selectedDay = null),
-                      onDeleted: () => setState(() => _selectedDay = null),
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: InputChip(
+                        label: const Text("Return to Month View"),
+                        onPressed: () => setState(() => _selectedDay = null),
+                        onDeleted: () => setState(() => _selectedDay = null),
+                      ),
                     ),
                   ),
 
                 // 1. Needs vs Wants 分析卡片
                 _buildAnalysisCard(stats['essentialTotal'], stats['lifestyleTotal']),
 
-                // 2. 消费趋势图 (只在月度视图显示)
-                if (_selectedDay == null && (stats['trendSpots'] as List).isNotEmpty)
-                  _buildTrendChart(stats['trendSpots'], stats['avgSpending']),
+                // 2. 消费占比饼图与具体分类金额
+                _buildPieChartAndLegend(stats['categoryTotals'], stats['focusedTotal']),
 
                 // 3. 预算进度条
                 _buildBudgetTracker(stats['focusedTotal']),
 
-                // 4. 消费历史
+                // 4. 分类过滤器与消费历史
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 25, 20, 10),
                   child: Row(
@@ -172,7 +210,16 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
                     ],
                   ),
                 ),
-                ListView.builder(
+
+                // 横向滚动的 Category Filter
+                _buildCategoryFilter(),
+
+                stats['displayData'].isEmpty
+                    ? const Padding(
+                  padding: EdgeInsets.all(30),
+                  child: Center(child: Text("No expenses found for this category.", style: TextStyle(color: Colors.grey))),
+                )
+                    : ListView.builder(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
                   itemCount: stats['displayData'].length,
@@ -248,58 +295,80 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
-  // --- UI 组件: 趋势图 (带日期和平均线) ---
-  Widget _buildTrendChart(List<FlSpot> spots, double avg) {
+  // --- UI 组件: 饼图及分类详情图例 (Category Breakdown) ---
+  Widget _buildPieChartAndLegend(Map<String, double> categoryTotals, double totalSpent) {
+    if (totalSpent == 0) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 20),
+        child: Center(child: Text("No expenses recorded yet.", style: TextStyle(color: Colors.grey))),
+      );
+    }
+
+    List<PieChartSectionData> pieSections = [];
+    categoryTotals.forEach((cat, amount) {
+      if (amount > 0) {
+        final double percentage = (amount / totalSpent) * 100;
+        pieSections.add(PieChartSectionData(
+          color: _getCategoryColor(cat),
+          value: amount,
+          title: '${percentage.toStringAsFixed(1)}%',
+          radius: 60,
+          titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+        ));
+      }
+    });
+
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 20),
-          child: Align(alignment: Alignment.centerLeft, child: Text("Spending Trend Analysis", style: TextStyle(fontWeight: FontWeight.bold))),
+          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 5),
+          child: Text("Expense Breakdown", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
         ),
-        Container(
+        const SizedBox(height: 15),
+        SizedBox(
           height: 200,
-          padding: const EdgeInsets.fromLTRB(10, 20, 25, 10),
-          child: LineChart(
-            LineChartData(
-              lineTouchData: LineTouchData(
-                  touchTooltipData: LineTouchTooltipData(
-                    getTooltipColor: (spot) => Colors.teal,
-                    getTooltipItems: (touchedSpots) => touchedSpots.map((s) => LineTooltipItem(
-                        "Day ${s.x.toInt()}\nRM ${s.y}", const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
-                    )).toList(),
-                  )
-              ),
-              gridData: const FlGridData(show: false),
-              titlesData: FlTitlesData(
-                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      interval: 5,
-                      getTitlesWidget: (val, meta) => Text(val.toInt().toString(), style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                    )
-                ),
-              ),
-              borderData: FlBorderData(show: false),
-              extraLinesData: ExtraLinesData(horizontalLines: [
-                HorizontalLine(y: avg, color: Colors.orange.withOpacity(0.5), strokeWidth: 1, dashArray: [5, 5])
-              ]),
-              lineBarsData: [
-                LineChartBarData(
-                  spots: spots,
-                  isCurved: true,
-                  color: Colors.teal,
-                  barWidth: 3,
-                  dotData: const FlDotData(show: true),
-                  belowBarData: BarAreaData(show: true, color: Colors.teal.withOpacity(0.05)),
-                )
-              ],
+          child: PieChart(
+            PieChartData(
+              sections: pieSections,
+              centerSpaceRadius: 40,
+              sectionsSpace: 2,
             ),
           ),
         ),
-        Text("Date of Month (Average: RM ${avg.toStringAsFixed(1)})", style: const TextStyle(fontSize: 10, color: Colors.grey)),
+        const SizedBox(height: 20),
+        // 分类详情 (展示每个Category花了多少钱)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            alignment: WrapAlignment.center,
+            children: categoryTotals.entries.map((e) {
+              final cat = e.key;
+              final amount = e.value;
+              final pct = (amount / totalSpent) * 100;
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircleAvatar(backgroundColor: _getCategoryColor(cat), radius: 6),
+                    const SizedBox(width: 8),
+                    Text('$cat: RM ${amount.toStringAsFixed(2)} ', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                    Text('(${pct.toStringAsFixed(1)}%)', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        const SizedBox(height: 10),
       ],
     );
   }
@@ -336,6 +405,35 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
+  // --- UI 组件: 分类过滤条 ---
+  Widget _buildCategoryFilter() {
+    return Container(
+      height: 50,
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: _filterOptions.length,
+        itemBuilder: (context, index) {
+          final cat = _filterOptions[index];
+          final isSelected = _filterCategory == cat;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ChoiceChip(
+              label: Text(cat),
+              selected: isSelected,
+              selectedColor: Colors.teal,
+              labelStyle: TextStyle(color: isSelected ? Colors.white : Colors.black87),
+              onSelected: (selected) {
+                if (selected) setState(() => _filterCategory = cat);
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   // --- 列表项 ---
   Widget _buildExpenseItem(Map<String, dynamic> item) {
     bool isEssential = item['category'] == 'Pet Food' || item['category'] == 'Medical';
@@ -344,8 +442,8 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.grey[100]!)),
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: isEssential ? Colors.teal.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
-          child: Icon(_getCategoryIcon(item['category']), color: isEssential ? Colors.teal : Colors.orange, size: 20),
+          backgroundColor: _getCategoryColor(item['category']).withOpacity(0.15),
+          child: Icon(_getCategoryIcon(item['category']), color: _getCategoryColor(item['category']), size: 20),
         ),
         title: Text(item['note']?.isEmpty ?? true ? item['category'] : item['note'], style: const TextStyle(fontWeight: FontWeight.bold)),
         subtitle: Text("${item['date']} • ${isEssential ? 'Essential' : 'Lifestyle'}"),
@@ -437,37 +535,42 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   }
 
   Future<void> _saveExpense({Map<String, dynamic>? existingData}) async {
-    if (_amountController.text.isEmpty) return;
+    // 1. 验证：金额是否为空
+    if (_amountController.text.trim().isEmpty) {
+      _showErrorDialog('Please enter the expense amount!');
+      return;
+    }
+
+    // 2. 验证：金额是否为有效数字
+    final parsedAmount = double.tryParse(_amountController.text.trim());
+    if (parsedAmount == null || parsedAmount <= 0) {
+      _showErrorDialog('Please enter a valid amount greater than 0!');
+      return;
+    }
+
     setState(() => _isSaving = true);
     try {
       final data = {
         'userID': _currentUID,
         'category': _selectedCategory,
-        'amount': double.tryParse(_amountController.text) ?? 0.0,
+        'amount': parsedAmount,
         'date': DateFormat('yyyy-MM-dd').format(_selectedDate),
         'note': _noteController.text.trim(),
       };
+
       if (existingData == null) {
         data['expenseID'] = 'EP${Random().nextInt(90000) + 10000}';
         await _supabase.from('pet_expenses').insert(data);
       } else {
         await _supabase.from('pet_expenses').update(data).eq('expenseID', existingData['expenseID']);
       }
-      if (mounted) Navigator.pop(context);
+
+      if (mounted) Navigator.pop(context); // 成功后关闭弹窗
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      // 3. 捕捉错误并弹出提示框
+      _showErrorDialog('Error saving record: $e');
     } finally {
       if (mounted) setState(() => _isSaving = false);
-    }
-  }
-
-  IconData _getCategoryIcon(String cat) {
-    switch (cat) {
-      case 'Pet Food': return Icons.restaurant;
-      case 'Pet Toy': return Icons.toys;
-      case 'Medical': return Icons.medical_services;
-      case 'Grooming': return Icons.content_cut;
-      default: return Icons.payments;
     }
   }
 }
