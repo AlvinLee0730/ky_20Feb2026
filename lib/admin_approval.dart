@@ -9,19 +9,21 @@ class AdminApprovalPage extends StatefulWidget {
 
 class _AdminApprovalPageState extends State<AdminApprovalPage> {
   final _supabase = Supabase.instance.client;
-
-  // Local set to track IDs that are currently being processed
-  // This ensures they disappear IMMEDIATELY from the UI
   final Set<String> _processedIds = {};
 
   Future<void> _handleAction(String id, bool approve, String table, String idField) async {
     setState(() {
-      _processedIds.add(id); // Instant UI removal
+      _processedIds.add(id);
     });
 
     try {
       if (approve) {
-        await _supabase.from(table).update({'isApproved': true}).eq(idField, id);
+        // .select() ensures the Realtime stream is triggered immediately
+        await _supabase
+            .from(table)
+            .update({'isApproved': true})
+            .eq(idField, id)
+            .select();
       } else {
         await _supabase.from(table).delete().eq(idField, id);
       }
@@ -32,18 +34,20 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
         );
       }
     } catch (e) {
-      // If it fails, remove from set so it reappears for a retry
       setState(() {
         _processedIds.remove(id);
       });
       debugPrint("Admin Action Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 4,
+      length: 5, // Adoption, Lost, Found, Education, Forum
       child: Scaffold(
         appBar: AppBar(
           title: const Text("Admin Approval", style: TextStyle(fontWeight: FontWeight.bold)),
@@ -55,6 +59,7 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
             tabs: [
               Tab(text: "Adoption"), Tab(text: "Lost"),
               Tab(text: "Found"), Tab(text: "Education"),
+              Tab(text: "Forum"),
             ],
           ),
         ),
@@ -64,6 +69,7 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
             _buildApprovalList('lost_post', 'lostPostID', 'location'),
             _buildApprovalList('found_post', 'foundPostID', 'location'),
             _buildApprovalList('pet_material', 'materialID', 'title'),
+            _buildApprovalList('forum_post', 'forumPostID', 'title'), // Matches your DB
           ],
         ),
       ),
@@ -72,19 +78,23 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
 
   Widget _buildApprovalList(String table, String idKey, String titleKey) {
     return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: _supabase
-          .from(table)
-          .stream(primaryKey: [idKey])
-          .order(idKey),
+      stream: _supabase.from(table).stream(primaryKey: [idKey]),
       builder: (context, snapshot) {
+        if (snapshot.hasData) {
+          // This will tell you if the database is sending ANY data at all
+          debugPrint("Admin Stream [${table}]: Received ${snapshot.data!.length} total rows");
+        }
+        if (snapshot.hasError) debugPrint("Stream Error: ${snapshot.error}");
+
         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
-        // FILTER LOGIC:
-        // 1. Must have isApproved == false
-        // 2. Must NOT be in the _processedIds set (Optimistic UI)
         final items = snapshot.data!.where((item) {
           final id = item[idKey].toString();
-          return item['isApproved'] == false && !_processedIds.contains(id);
+          // Show if isApproved is false OR null, and not in local processed set
+          final isApprovedValue = item['isApproved'];
+          final bool isPending = isApprovedValue == false || isApprovedValue == null;
+
+          return isPending && !_processedIds.contains(id);
         }).toList();
 
         if (items.isEmpty) {
@@ -96,18 +106,32 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
           itemBuilder: (context, index) {
             final item = items[index];
             final String itemId = item[idKey].toString();
-            final String? imagePath = item['mediaURL'] ?? item['photoURL'];
+
+            // Updated to include 'attachedFileURL' for Forum Posts
+            final String? imagePath = item['mediaURL'] ??
+                item['photoURL'] ??
+                item['imageURL'] ??
+                item['attachedFileURL']; // Add this line
 
             return Card(
               margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               child: ListTile(
                 leading: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: imagePath != null
-                      ? Image.network(imagePath, width: 50, height: 50, fit: BoxFit.cover)
-                      : const Icon(Icons.description),
+                  child: imagePath != null && imagePath.isNotEmpty
+                      ? Image.network(
+                    imagePath,
+                    width: 50,
+                    height: 50,
+                    fit: BoxFit.cover,
+                    errorBuilder: (c, e, s) => const Icon(Icons.broken_image),
+                  )
+                      : const Icon(Icons.forum_outlined),
                 ),
-                title: Text(item[titleKey] ?? "No Title"),
+                title: Text(
+                    item[titleKey] ?? "No Title",
+                    style: const TextStyle(fontWeight: FontWeight.bold)
+                ),
                 subtitle: Text("ID: $itemId"),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,

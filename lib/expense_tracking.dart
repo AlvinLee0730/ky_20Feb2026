@@ -13,13 +13,13 @@ class ExpenseTrackingPage extends StatefulWidget {
 
 class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   final _supabase = Supabase.instance.client;
-
   final _amountController = TextEditingController();
   final _noteController = TextEditingController();
 
   String _selectedCategory = 'Pet Food';
   DateTime _selectedDate = DateTime.now();
   DateTime _focusedMonth = DateTime(DateTime.now().year, DateTime.now().month);
+  DateTime? _selectedDay;
   bool _isSaving = false;
 
   final Map<String, double> _monthlyBudgets = {};
@@ -38,62 +38,402 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     return _monthlyBudgets[key] ?? _defaultBudget;
   }
 
-  // --- UPDATED ANALYTICS CALCULATIONS ---
+  // --- 高级数据分析逻辑 ---
   Map<String, dynamic> _calculateAdvancedAnalytics(List<Map<String, dynamic>> allData) {
-    // 1. Filter current month data
-    final focusedMonthData = allData.where((e) {
+    // 1. 基础过滤：判断是看全月还是看某一天
+    final filteredData = allData.where((e) {
       DateTime d = DateTime.parse(e['date']);
+      if (_selectedDay != null) {
+        return d.year == _selectedDay!.year && d.month == _selectedDay!.month && d.day == _selectedDay!.day;
+      }
       return d.year == _focusedMonth.year && d.month == _focusedMonth.month;
     }).toList();
 
-    double focusedTotal = focusedMonthData.fold(0, (sum, e) => sum + (e['amount'] ?? 0));
+    double focusedTotal = filteredData.fold(0, (sum, e) => sum + (e['amount'] ?? 0));
 
-    // 2. Calculate Top Spending Category (Financial Leak)
-    Map<String, double> categoryTotals = {};
-    for (var e in focusedMonthData) {
-      String cat = e['category'] ?? 'Others';
-      categoryTotals[cat] = (categoryTotals[cat] ?? 0) + (e['amount'] ?? 0);
+    // 2. 趋势图数据构建 (X轴为日期, Y轴为金额)
+    List<FlSpot> trendSpots = [];
+    double avgSpending = 0;
+    if (_selectedDay == null) {
+      Map<int, double> dailyMap = {};
+      // 初始化当月每天为0（为了让折线更完整）
+      int daysInMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1, 0).day;
+
+      for (var e in filteredData) {
+        int day = DateTime.parse(e['date']).day;
+        dailyMap[day] = (dailyMap[day] ?? 0) + (e['amount'] ?? 0).toDouble();
+      }
+
+      List<int> sortedDays = dailyMap.keys.toList()..sort();
+      trendSpots = sortedDays.map((day) => FlSpot(day.toDouble(), dailyMap[day]!)).toList();
+
+      if (sortedDays.isNotEmpty) {
+        avgSpending = focusedTotal / sortedDays.length; // 计算有消费天数的平均值
+      }
     }
 
-    String topCategory = "None";
-    double topPercent = 0;
-    if (categoryTotals.isNotEmpty) {
-      var sortedEntries = categoryTotals.entries.toList()
-        ..sort((a, b) => b.value.compareTo(a.value));
-      topCategory = sortedEntries.first.key;
-      topPercent = (sortedEntries.first.value / focusedTotal) * 100;
-    }
+    // 3. Needs vs. Wants 逻辑
+    double essentialTotal = 0; // 刚需：食物、医疗
+    double lifestyleTotal = 0; // 弹性：玩具、美容、其他
 
-    // 3. Compare to last month
-    DateTime prevMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1);
-    final prevMonthData = allData.where((e) {
-      DateTime d = DateTime.parse(e['date']);
-      return d.year == prevMonth.year && d.month == prevMonth.month;
-    }).toList();
-    double prevTotal = prevMonthData.fold(0, (sum, e) => sum + (e['amount'] ?? 0));
-
-    double variance = 0;
-    if (prevTotal > 0) {
-      variance = ((focusedTotal - prevTotal) / prevTotal) * 100;
+    for (var e in filteredData) {
+      String cat = e['category'];
+      double amt = (e['amount'] ?? 0).toDouble();
+      if (cat == 'Pet Food' || cat == 'Medical') {
+        essentialTotal += amt;
+      } else {
+        lifestyleTotal += amt;
+      }
     }
 
     return {
       'focusedTotal': focusedTotal,
-      'variance': variance,
-      'topCategory': topCategory,
-      'topPercent': topPercent,
-      'displayData': focusedMonthData,
+      'trendSpots': trendSpots,
+      'avgSpending': avgSpending,
+      'essentialTotal': essentialTotal,
+      'lifestyleTotal': lifestyleTotal,
+      'displayData': filteredData,
     };
   }
 
-  void _changeMonth(int offset) {
-    setState(() {
-      _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + offset);
-    });
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        title: InkWell(
+          onTap: _pickViewDate,
+          child: Column(
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_selectedDay == null
+                      ? DateFormat('MMM yyyy').format(_focusedMonth)
+                      : DateFormat('yyyy-MM-dd').format(_selectedDay!),
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                  const Icon(Icons.arrow_drop_down),
+                ],
+              ),
+              Text(_selectedDay == null ? "Monthly View" : "Daily View",
+                  style: TextStyle(fontSize: 10, color: Colors.teal[700], fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+        centerTitle: true,
+        leading: IconButton(icon: const Icon(Icons.chevron_left), onPressed: () => _changeMonth(-1)),
+        actions: [
+          IconButton(icon: const Icon(Icons.chevron_right), onPressed: () => _changeMonth(1)),
+          IconButton(icon: const Icon(Icons.settings_outlined), onPressed: _showBudgetSettings),
+        ],
+      ),
+      body: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: _expenseStream,
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+
+          final stats = _calculateAdvancedAnalytics(snapshot.data!);
+
+          return SingleChildScrollView(
+            child: Column(
+              children: [
+                if (_selectedDay != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: InputChip(
+                      label: const Text("Return to Month View"),
+                      onPressed: () => setState(() => _selectedDay = null),
+                      onDeleted: () => setState(() => _selectedDay = null),
+                    ),
+                  ),
+
+                // 1. Needs vs Wants 分析卡片
+                _buildAnalysisCard(stats['essentialTotal'], stats['lifestyleTotal']),
+
+                // 2. 消费趋势图 (只在月度视图显示)
+                if (_selectedDay == null && (stats['trendSpots'] as List).isNotEmpty)
+                  _buildTrendChart(stats['trendSpots'], stats['avgSpending']),
+
+                // 3. 预算进度条
+                _buildBudgetTracker(stats['focusedTotal']),
+
+                // 4. 消费历史
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 25, 20, 10),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(_selectedDay == null ? "Monthly Records" : "Daily Records",
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      Text("${stats['displayData'].length} items", style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+                    ],
+                  ),
+                ),
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: stats['displayData'].length,
+                  itemBuilder: (context, index) => _buildExpenseItem(stats['displayData'][index]),
+                ),
+                const SizedBox(height: 100),
+              ],
+            ),
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _showExpenseForm(),
+        backgroundColor: Colors.teal[800],
+        label: const Text("Add Record", style: TextStyle(color: Colors.white)),
+        icon: const Icon(Icons.add, color: Colors.white),
+      ),
+    );
   }
 
-  String _generateExpenseID() {
-    return 'EP${(Random().nextInt(90000) + 10000)}';
+  // --- UI 组件: 分析卡片 ---
+  Widget _buildAnalysisCard(double essential, double lifestyle) {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+          color: Colors.teal[900],
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [BoxShadow(color: Colors.teal.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 5))]
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _statItem("Essential", "RM ${essential.toStringAsFixed(2)}", Colors.tealAccent),
+              Container(width: 1, height: 40, color: Colors.white24),
+              _statItem("Lifestyle", "RM ${lifestyle.toStringAsFixed(2)}", Colors.orangeAccent),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+            child: Row(
+              children: [
+                const Icon(Icons.auto_awesome, color: Colors.orangeAccent, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    lifestyle > 0
+                        ? "Saving Hint: Reducing lifestyle costs could save you RM ${lifestyle.toStringAsFixed(0)} this month."
+                        : "Awesome! You've only spent on essential needs.",
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _statItem(String label, String value, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        const SizedBox(height: 4),
+        Text(value, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.bold)),
+      ],
+    );
+  }
+
+  // --- UI 组件: 趋势图 (带日期和平均线) ---
+  Widget _buildTrendChart(List<FlSpot> spots, double avg) {
+    return Column(
+      children: [
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Align(alignment: Alignment.centerLeft, child: Text("Spending Trend Analysis", style: TextStyle(fontWeight: FontWeight.bold))),
+        ),
+        Container(
+          height: 200,
+          padding: const EdgeInsets.fromLTRB(10, 20, 25, 10),
+          child: LineChart(
+            LineChartData(
+              lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (spot) => Colors.teal,
+                    getTooltipItems: (touchedSpots) => touchedSpots.map((s) => LineTooltipItem(
+                        "Day ${s.x.toInt()}\nRM ${s.y}", const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
+                    )).toList(),
+                  )
+              ),
+              gridData: const FlGridData(show: false),
+              titlesData: FlTitlesData(
+                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      interval: 5,
+                      getTitlesWidget: (val, meta) => Text(val.toInt().toString(), style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                    )
+                ),
+              ),
+              borderData: FlBorderData(show: false),
+              extraLinesData: ExtraLinesData(horizontalLines: [
+                HorizontalLine(y: avg, color: Colors.orange.withOpacity(0.5), strokeWidth: 1, dashArray: [5, 5])
+              ]),
+              lineBarsData: [
+                LineChartBarData(
+                  spots: spots,
+                  isCurved: true,
+                  color: Colors.teal,
+                  barWidth: 3,
+                  dotData: const FlDotData(show: true),
+                  belowBarData: BarAreaData(show: true, color: Colors.teal.withOpacity(0.05)),
+                )
+              ],
+            ),
+          ),
+        ),
+        Text("Date of Month (Average: RM ${avg.toStringAsFixed(1)})", style: const TextStyle(fontSize: 10, color: Colors.grey)),
+      ],
+    );
+  }
+
+  // --- UI 组件: 预算 ---
+  Widget _buildBudgetTracker(double spent) {
+    double budget = _currentMonthBudget;
+    double progress = (spent / budget).clamp(0, 1);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(color: Colors.grey[50], borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.grey[200]!)),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text("Monthly Budget Usage", style: TextStyle(fontWeight: FontWeight.w600)),
+              Text("RM ${spent.toStringAsFixed(0)} / ${budget.toInt()}"),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 8,
+              backgroundColor: Colors.grey[200],
+              color: spent > budget ? Colors.redAccent : Colors.teal,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- 列表项 ---
+  Widget _buildExpenseItem(Map<String, dynamic> item) {
+    bool isEssential = item['category'] == 'Pet Food' || item['category'] == 'Medical';
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.grey[100]!)),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: isEssential ? Colors.teal.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
+          child: Icon(_getCategoryIcon(item['category']), color: isEssential ? Colors.teal : Colors.orange, size: 20),
+        ),
+        title: Text(item['note']?.isEmpty ?? true ? item['category'] : item['note'], style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text("${item['date']} • ${isEssential ? 'Essential' : 'Lifestyle'}"),
+        trailing: Text("RM ${item['amount']}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        onTap: () => _showExpenseForm(existingData: item),
+      ),
+    );
+  }
+
+  // --- 功能方法 ---
+  Future<void> _pickViewDate() async {
+    final picked = await showDatePicker(context: context, initialDate: _selectedDay ?? _focusedMonth, firstDate: DateTime(2020), lastDate: DateTime(2100));
+    if (picked != null) setState(() { _selectedDay = picked; _focusedMonth = DateTime(picked.year, picked.month); });
+  }
+
+  void _changeMonth(int offset) {
+    setState(() { _selectedDay = null; _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + offset); });
+  }
+
+  void _showBudgetSettings() {
+    final controller = TextEditingController(text: _currentMonthBudget.toString());
+    showDialog(context: context, builder: (context) => AlertDialog(
+      title: const Text("Set Monthly Budget"),
+      content: TextField(controller: controller, keyboardType: TextInputType.number, decoration: const InputDecoration(suffixText: "RM")),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+        ElevatedButton(onPressed: () {
+          setState(() => _monthlyBudgets[DateFormat('yyyy-MM').format(_focusedMonth)] = double.tryParse(controller.text) ?? 1000.0);
+          Navigator.pop(context);
+        }, child: const Text("Save")),
+      ],
+    ));
+  }
+
+  void _showExpenseForm({Map<String, dynamic>? existingData}) {
+    if (existingData != null) {
+      _amountController.text = existingData['amount'].toString();
+      _noteController.text = existingData['note'] ?? "";
+      _selectedCategory = existingData['category'];
+      _selectedDate = DateTime.parse(existingData['date']);
+    } else {
+      _amountController.clear(); _noteController.clear(); _selectedCategory = 'Pet Food'; _selectedDate = _selectedDay ?? DateTime.now();
+    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, top: 20, left: 20, right: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text("Record Expense", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 20),
+              ListTile(
+                tileColor: Colors.grey[100],
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                title: Text("Date: ${DateFormat('yyyy-MM-dd').format(_selectedDate)}"),
+                trailing: const Icon(Icons.calendar_month),
+                onTap: () async {
+                  final picked = await showDatePicker(context: context, initialDate: _selectedDate, firstDate: DateTime(2020), lastDate: DateTime(2100));
+                  if (picked != null) setModalState(() => _selectedDate = picked);
+                },
+              ),
+              const SizedBox(height: 15),
+              TextField(controller: _amountController, decoration: const InputDecoration(labelText: "Amount (RM)", border: OutlineInputBorder()), keyboardType: TextInputType.number),
+              const SizedBox(height: 15),
+              DropdownButtonFormField(
+                value: _selectedCategory,
+                items: ['Pet Food', 'Pet Toy', 'Medical', 'Grooming', 'Others'].map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                onChanged: (v) => setModalState(() => _selectedCategory = v.toString()),
+                decoration: const InputDecoration(labelText: "Category", border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 15),
+              TextField(controller: _noteController, decoration: const InputDecoration(labelText: "Note (Optional)", border: OutlineInputBorder())),
+              const SizedBox(height: 25),
+              _isSaving ? const CircularProgressIndicator() : ElevatedButton(
+                style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 55), backgroundColor: Colors.teal[800], shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                onPressed: () => _saveExpense(existingData: existingData),
+                child: const Text("Save Record", style: TextStyle(color: Colors.white, fontSize: 16)),
+              ),
+              const SizedBox(height: 30),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _saveExpense({Map<String, dynamic>? existingData}) async {
@@ -108,7 +448,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
         'note': _noteController.text.trim(),
       };
       if (existingData == null) {
-        data['expenseID'] = _generateExpenseID();
+        data['expenseID'] = 'EP${Random().nextInt(90000) + 10000}';
         await _supabase.from('pet_expenses').insert(data);
       } else {
         await _supabase.from('pet_expenses').update(data).eq('expenseID', existingData['expenseID']);
@@ -118,280 +458,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
     } finally {
       if (mounted) setState(() => _isSaving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(icon: const Icon(Icons.arrow_left), onPressed: () => _changeMonth(-1)),
-            Text(DateFormat('MMM yyyy').format(_focusedMonth), style: const TextStyle(fontWeight: FontWeight.bold)),
-            IconButton(icon: const Icon(Icons.arrow_right), onPressed: () => _changeMonth(1)),
-          ],
-        ),
-        centerTitle: true,
-        actions: [IconButton(icon: const Icon(Icons.settings_outlined), onPressed: _showBudgetSettings)],
-      ),
-      body: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: _expenseStream,
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-
-          final stats = _calculateAdvancedAnalytics(snapshot.data!);
-          final List<Map<String, dynamic>> displayData = stats['displayData'];
-
-          return SingleChildScrollView(
-            child: Column(
-              children: [
-                // UPDATED ANALYTICS ROW
-                _buildAnalyticsRow(
-                    stats['variance'],
-                    stats['topCategory'],
-                    stats['topPercent']
-                ),
-                _buildBudgetTracker(stats['focusedTotal']),
-                if (displayData.isNotEmpty) ...[
-                  _buildCategoryPieChart(displayData),
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(20, 10, 20, 5),
-                    child: Align(alignment: Alignment.centerLeft, child: Text("History", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-                  ),
-                  ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: displayData.length,
-                    itemBuilder: (context, index) => _buildExpenseItem(displayData[index]),
-                  ),
-                ] else
-                  Padding(
-                    padding: const EdgeInsets.all(60),
-                    child: Column(
-                      children: [
-                        Icon(Icons.receipt_long, size: 50, color: Colors.grey[300]),
-                        const SizedBox(height: 10),
-                        const Text("No expenses for this period", style: TextStyle(color: Colors.grey)),
-                      ],
-                    ),
-                  ),
-                const SizedBox(height: 100),
-              ],
-            ),
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showExpenseForm(),
-        backgroundColor: Colors.teal[800],
-        icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text("Add Expense", style: TextStyle(color: Colors.white)),
-      ),
-    );
-  }
-
-  // --- UPDATED ANALYTICS ROW UI ---
-  Widget _buildAnalyticsRow(double variance, String topCat, double topPer) {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Row(
-        children: [
-          // NEW CARD: Top Spending Category
-          _analyticCard(
-              "Top Spending",
-              "$topCat (${topPer.toStringAsFixed(0)}%)",
-              Icons.warning_amber_rounded,
-              Colors.orange
-          ),
-          const SizedBox(width: 12),
-          // UPDATED CARD: Renamed to "Compared to last month"
-          _analyticCard(
-              "Compared to last month",
-              "${variance > 0 ? '+' : ''}${variance.toStringAsFixed(1)}%",
-              Icons.compare_arrows,
-              variance > 0 ? Colors.red : Colors.green
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _analyticCard(String title, String value, IconData icon, Color color) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(15),
-        height: 110, // Fixed height to keep cards aligned
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: color.withOpacity(0.1)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(height: 8),
-            Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
-            const Spacer(),
-            Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: color)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBudgetTracker(double spent) {
-    double budget = _currentMonthBudget;
-    double progress = (spent / budget).clamp(0, 1);
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(20)),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text("Budget Usage", style: TextStyle(fontWeight: FontWeight.w500)),
-              Text("RM ${spent.toStringAsFixed(0)} / RM ${budget.toInt()}"),
-            ],
-          ),
-          const SizedBox(height: 12),
-          LinearProgressIndicator(
-            value: progress,
-            minHeight: 8,
-            borderRadius: BorderRadius.circular(10),
-            color: spent > budget ? Colors.red : Colors.teal,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCategoryPieChart(List<Map<String, dynamic>> data) {
-    Map<String, double> categories = {};
-    for (var e in data) {
-      categories[e['category']] = (categories[e['category']] ?? 0) + (e['amount'] ?? 0);
-    }
-    return Container(
-      height: 180,
-      margin: const EdgeInsets.symmetric(vertical: 20),
-      child: PieChart(
-        PieChartData(
-          sections: categories.entries.map((e) => PieChartSectionData(
-            color: _getCategoryColor(e.key),
-            value: e.value,
-            radius: 40,
-            title: '',
-          )).toList(),
-          centerSpaceRadius: 40,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildExpenseItem(Map<String, dynamic> item) {
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.grey[200]!)),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: _getCategoryColor(item['category']).withOpacity(0.1),
-          child: Icon(_getCategoryIcon(item['category']), color: _getCategoryColor(item['category']), size: 20),
-        ),
-        title: Text(item['note']?.isEmpty ?? true ? item['category'] : item['note'], style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(item['date']),
-        trailing: Text("RM ${item['amount']}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
-        onTap: () => _showExpenseForm(existingData: item),
-      ),
-    );
-  }
-
-  void _showExpenseForm({Map<String, dynamic>? existingData}) {
-    if (existingData != null) {
-      _amountController.text = existingData['amount'].toString();
-      _noteController.text = existingData['note'] ?? "";
-      _selectedCategory = existingData['category'];
-      _selectedDate = DateTime.parse(existingData['date']);
-    } else {
-      _amountController.clear(); _noteController.clear(); _selectedCategory = 'Pet Food'; _selectedDate = DateTime.now();
-    }
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, top: 20, left: 20, right: 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text("Expense Record", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 15),
-              ListTile(
-                title: Text("Date: ${DateFormat('yyyy-MM-dd').format(_selectedDate)}"),
-                trailing: const Icon(Icons.edit_calendar, color: Colors.teal),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey[300]!)),
-                onTap: () async {
-                  final picked = await showDatePicker(context: context, initialDate: _selectedDate, firstDate: DateTime(2020), lastDate: DateTime(2100));
-                  if (picked != null) setModalState(() => _selectedDate = picked);
-                },
-              ),
-              const SizedBox(height: 10),
-              TextField(controller: _amountController, decoration: const InputDecoration(labelText: "Amount (RM)", border: OutlineInputBorder()), keyboardType: TextInputType.number),
-              const SizedBox(height: 10),
-              DropdownButtonFormField(
-                value: _selectedCategory,
-                items: ['Pet Food', 'Pet Toy', 'Medical', 'Grooming', 'Others'].map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (v) => setModalState(() => _selectedCategory = v.toString()),
-                decoration: const InputDecoration(border: OutlineInputBorder(), labelText: "Category"),
-              ),
-              const SizedBox(height: 10),
-              TextField(controller: _noteController, decoration: const InputDecoration(labelText: "Notes", border: OutlineInputBorder())),
-              const SizedBox(height: 20),
-              _isSaving ? const CircularProgressIndicator() : ElevatedButton(
-                style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50), backgroundColor: Colors.teal[800]),
-                onPressed: () => _saveExpense(existingData: existingData),
-                child: const Text("Save", style: TextStyle(color: Colors.white)),
-              ),
-              const SizedBox(height: 20),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showBudgetSettings() {
-    final controller = TextEditingController(text: _currentMonthBudget.toString());
-    showDialog(context: context, builder: (context) => AlertDialog(
-      title: const Text("Set Budget"),
-      content: TextField(controller: controller, keyboardType: TextInputType.number, decoration: const InputDecoration(suffixText: "RM")),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
-        ElevatedButton(onPressed: () {
-          setState(() => _monthlyBudgets[DateFormat('yyyy-MM').format(_focusedMonth)] = double.tryParse(controller.text) ?? 1000.0);
-          Navigator.pop(context);
-        }, child: const Text("Set")),
-      ],
-    ));
-  }
-
-  Color _getCategoryColor(String cat) {
-    switch (cat) {
-      case 'Pet Food': return Colors.blue;
-      case 'Pet Toy': return Colors.orange;
-      case 'Medical': return Colors.red;
-      case 'Grooming': return Colors.purple;
-      default: return Colors.blueGrey;
     }
   }
 
