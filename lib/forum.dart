@@ -32,9 +32,7 @@ class _ForumPageState extends State<ForumPage> {
   @override
   void initState() {
     super.initState();
-    _currentUserId = supabase.auth.currentUser?.id;
-    _fetchUserRole();
-    _fetchPosts();
+    _initializeData();
     _searchController.addListener(_onSearchChanged);
   }
 
@@ -47,7 +45,18 @@ class _ForumPageState extends State<ForumPage> {
     super.dispose();
   }
 
-  // --- SEARCH LOGIC ---
+  // 1. Ensure User is loaded BEFORE fetching
+  Future<void> _initializeData() async {
+    final user = supabase.auth.currentUser;
+    if (user != null) {
+      _currentUserId = user.id;
+      await _fetchUserRole();
+      await _fetchPosts();
+    } else {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   void _onSearchChanged() {
     String query = _searchController.text.toLowerCase();
     setState(() {
@@ -70,26 +79,40 @@ class _ForumPageState extends State<ForumPage> {
   Future<void> _fetchPosts() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
-    try {
-      final postData = await supabase.from('forum_post').select().order('uploadDate', ascending: false);
 
+    try {
+      // 1. Fetch all forum posts
+      final postData = await supabase
+          .from('forum_post')
+          .select()
+          .order('uploadDate', ascending: false);
+
+      // 2. Fetch IDs of posts liked by the current user
+      List<String> myLikes = [];
       if (_currentUserId != null) {
-        final likedData = await supabase.from('post_likes').select('postID').eq('userID', _currentUserId!);
-        _myLikedPostIds = (likedData as List).map((item) => item['postID'].toString()).toList();
+        final likedRows = await supabase
+            .from('forum_likes')
+            .select('postID')
+            .eq('userID', _currentUserId!);
+
+        // Convert the database rows into a simple list of strings
+        myLikes = (likedRows as List).map((row) => row['postID'].toString()).toList();
       }
 
-      setState(() {
-        _posts = List<Map<String, dynamic>>.from(postData);
-        _filteredPosts = _posts;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _posts = List<Map<String, dynamic>>.from(postData);
+          _filteredPosts = _posts;
+          _myLikedPostIds = myLikes; // This tells the UI which hearts to color red
+          _isLoading = false;
+        });
+      }
     } catch (e) {
       debugPrint("Fetch error: $e");
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // --- DELETE LOGIC ---
   Future<void> _deletePost(String postId) async {
     try {
       await supabase.from('forum_post').delete().eq('forumPostID', postId);
@@ -100,7 +123,6 @@ class _ForumPageState extends State<ForumPage> {
     } catch (e) { debugPrint("Delete error: $e"); }
   }
 
-  // --- OPTIONS MENU ---
   void _showOptionsMenu(Map<String, dynamic> post) {
     showModalBottomSheet(
       context: context,
@@ -151,14 +173,28 @@ class _ForumPageState extends State<ForumPage> {
   }
 
   Future<void> _handleLike(String postId) async {
-    if (_currentUserId == null) return;
+    if (_currentUserId == null) {
+      debugPrint("Like failed: No user logged in");
+      return;
+    }
+
     try {
       await supabase.rpc('toggle_post_like', params: {
         'p_post_id': postId,
         'p_user_id': _currentUserId,
       });
-      _fetchPosts();
-    } catch (e) { debugPrint("Like error: $e"); }
+
+      // Refresh the local data to show the red heart and new count
+      await _fetchPosts();
+
+    } catch (e) {
+      debugPrint("Detailed Like Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e")),
+        );
+      }
+    }
   }
 
   String _generatePostID() {
@@ -222,21 +258,27 @@ class _ForumPageState extends State<ForumPage> {
                       String? imageUrl = isEdit ? post['attachedFileURL'] : null;
                       if (_imageFile != null) {
                         final fileName = 'forum_${DateTime.now().millisecondsSinceEpoch}.png';
-                        await supabase.storage.from('forum_media').upload(fileName, _imageFile!);
-                        imageUrl = supabase.storage.from('forum_media').getPublicUrl(fileName);
+                        await supabase.storage.from('forum_photos').upload(fileName, _imageFile!);
+                        imageUrl = supabase.storage.from('forum_photos').getPublicUrl(fileName);
                       }
+
+                      final Map<String, dynamic> data = {
+                        'title': _titleController.text.trim(),
+                        'content': _contentController.text.trim(),
+                        'tags': _tagsController.text.trim(),
+                        'attachedFileURL': imageUrl,
+                        'isApproved': _userRole == 'Admin',
+                      };
+
                       if (isEdit) {
-                        await supabase.from('forum_post').update({
-                          'title': _titleController.text.trim(),
-                          'content': _contentController.text.trim(),
-                          'tags': _tagsController.text.trim(),
-                          'attachedFileURL': imageUrl,
-                        }).eq('forumPostID', post['forumPostID']);
+                        await supabase.from('forum_post').update(data).eq('forumPostID', post['forumPostID']);
                       } else {
-                        await supabase.from('forum_post').insert({
-                          'forumPostID': _generatePostID(), 'userID': _currentUserId, 'title': _titleController.text.trim(), 'content': _contentController.text.trim(),
-                          'tags': _tagsController.text.trim(), 'attachedFileURL': imageUrl, 'uploadDate': DateFormat('yyyy-MM-dd').format(DateTime.now()), 'likeCount': 0, 'replyCount': 0,
-                        });
+                        data['forumPostID'] = _generatePostID();
+                        data['userID'] = _currentUserId;
+                        data['uploadDate'] = DateFormat('yyyy-MM-dd').format(DateTime.now());
+                        data['likeCount'] = 0;
+                        data['replyCount'] = 0;
+                        await supabase.from('forum_post').insert(data);
                       }
                       if (mounted) { Navigator.pop(context); _fetchPosts(); }
                     } finally { setModalState(() => _isSaving = false); }
@@ -288,45 +330,72 @@ class _ForumPageState extends State<ForumPage> {
           itemCount: _filteredPosts.length,
           itemBuilder: (context, index) {
             final post = _filteredPosts[index];
+            final bool isApproved = post['isApproved'] == true;
             final bool canModify = post['userID'] == _currentUserId || _userRole == 'Admin';
             final bool isLikedByMe = _myLikedPostIds.contains(post['forumPostID'].toString());
 
             return Card(
               margin: const EdgeInsets.only(bottom: 15),
+              clipBehavior: Clip.antiAlias,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
               child: InkWell(
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PostDetailPage(post: post))).then((_) => _fetchPosts()),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Stack(
                   children: [
-                    if (post['attachedFileURL'] != null)
-                      ClipRRect(borderRadius: const BorderRadius.vertical(top: Radius.circular(15)), child: Image.network(post['attachedFileURL'], height: 200, width: double.infinity, fit: BoxFit.cover)),
-                    ListTile(
-                      title: Text(post['title'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                      subtitle: Text(post['tags'] ?? "", style: const TextStyle(color: Colors.teal)),
-                      trailing: canModify ? IconButton(icon: const Icon(Icons.more_vert), onPressed: () => _showOptionsMenu(post)) : null,
-                    ),
-                    Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(post['content'], maxLines: 2, overflow: TextOverflow.ellipsis)),
-                    const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Divider()),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: Row(
-                        children: [
-                          InkWell(
-                            onTap: () => _handleLike(post['forumPostID']),
-                            child: Row(children: [
-                              Icon(isLikedByMe ? Icons.favorite : Icons.favorite_border, color: isLikedByMe ? Colors.red : Colors.grey, size: 20),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (post['attachedFileURL'] != null)
+                          Image.network(post['attachedFileURL'], height: 200, width: double.infinity, fit: BoxFit.cover),
+                        ListTile(
+                          title: Text(post['title'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                          subtitle: Text(post['tags'] ?? "", style: const TextStyle(color: Colors.teal)),
+                          trailing: canModify ? IconButton(icon: const Icon(Icons.more_vert), onPressed: () => _showOptionsMenu(post)) : null,
+                        ),
+                        Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(post['content'], maxLines: 2, overflow: TextOverflow.ellipsis)),
+                        const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Divider()),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                          child: Row(
+                            children: [
+                              InkWell(
+                                onTap: () => _handleLike(post['forumPostID']),
+                                child: Row(children: [
+                                  Icon(isLikedByMe ? Icons.favorite : Icons.favorite_border, color: isLikedByMe ? Colors.red : Colors.grey, size: 20),
+                                  const SizedBox(width: 5),
+                                  Text("${post['likeCount']}"),
+                                ]),
+                              ),
+                              const SizedBox(width: 20),
+                              const Icon(Icons.chat_bubble_outline, size: 20, color: Colors.grey),
                               const SizedBox(width: 5),
-                              Text("${post['likeCount']}"),
-                            ]),
+                              Text("${post['replyCount']}"),
+                            ],
                           ),
-                          const SizedBox(width: 20),
-                          const Icon(Icons.chat_bubble_outline, size: 20, color: Colors.grey),
-                          const SizedBox(width: 5),
-                          Text("${post['replyCount']}"),
-                        ],
+                        )
+                      ],
+                    ),
+
+                    if (!isApproved)
+                      Positioned.fill(
+                        child: Container(
+                          color: Colors.black45,
+                          child: const Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.hourglass_empty, color: Colors.white, size: 30),
+                                SizedBox(height: 8),
+                                Text(
+                                  "PENDING APPROVAL",
+                                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16, letterSpacing: 1.2),
+                                ),
+                                Text("Only visible to you", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
-                    )
                   ],
                 ),
               ),
@@ -359,17 +428,58 @@ class _PostDetailPageState extends State<PostDetailPage> {
   }
 
   Future<void> _fetchComments() async {
-    final data = await supabase.from('comment').select().eq('forumPostID', widget.post['forumPostID']).order('commentDate', ascending: true);
-    if (mounted) setState(() { _comments = List<Map<String, dynamic>>.from(data); _isLoading = false; });
+    try {
+      final data = await supabase
+          .from('forum_comments')
+          .select()
+          .eq('postID', widget.post['forumPostID']) // Using postID column
+          .order('commentDate', ascending: true);
+
+      if (mounted) {
+        setState(() {
+          _comments = List<Map<String, dynamic>>.from(data);
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Fetch error: $e");
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _addComment() async {
     if (_commentController.text.isEmpty) return;
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
     final cid = "CM${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}";
-    await supabase.from('comment').insert({'commentID': cid, 'forumPostID': widget.post['forumPostID'], 'text': _commentController.text.trim(), 'commentDate': DateFormat('yyyy-MM-dd').format(DateTime.now())});
-    await supabase.from('forum_post').update({'replyCount': (widget.post['replyCount'] ?? 0) + 1}).eq('forumPostID', widget.post['forumPostID']);
-    _commentController.clear();
-    _fetchComments();
+
+    try {
+      // Changed key to 'postID' to match your database
+      await supabase.from('forum_comments').insert({
+        'commentID': cid,
+        'postID': widget.post['forumPostID'], // Sending post ID to the postID column
+        'userID': user.id,                    // Required for RLS policy
+        'text': _commentController.text.trim(),
+        'commentDate': DateFormat('yyyy-MM-dd').format(DateTime.now())
+      });
+
+      // Update the reply count on the main forum post
+      await supabase.from('forum_post')
+          .update({'replyCount': (widget.post['replyCount'] ?? 0) + 1})
+          .eq('forumPostID', widget.post['forumPostID']);
+
+      _commentController.clear();
+      _fetchComments();
+
+    } catch (e) {
+      debugPrint("Add Comment error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e")),
+        );
+      }
+    }
   }
 
   @override
@@ -382,7 +492,8 @@ class _PostDetailPageState extends State<PostDetailPage> {
             child: SingleChildScrollView(
               child: Column(
                 children: [
-                  if (widget.post['attachedFileURL'] != null) Image.network(widget.post['attachedFileURL']),
+                  if (widget.post['attachedFileURL'] != null)
+                    Image.network(widget.post['attachedFileURL']),
                   Padding(
                     padding: const EdgeInsets.all(20),
                     child: Column(
@@ -394,15 +505,32 @@ class _PostDetailPageState extends State<PostDetailPage> {
                         const Divider(height: 40),
                         const Text("Comments", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                         const SizedBox(height: 10),
-                        _isLoading ? const Center(child: CircularProgressIndicator()) : ListView.builder(
+                        _isLoading
+                            ? const Center(child: CircularProgressIndicator())
+                            : ListView.builder(
                           shrinkWrap: true,
                           physics: const NeverScrollableScrollPhysics(),
                           itemCount: _comments.length,
-                          itemBuilder: (context, i) => ListTile(
-                            leading: const CircleAvatar(child: Icon(Icons.person)),
-                            title: Text(_comments[i]['text']),
-                            subtitle: Text(_comments[i]['commentDate']),
-                          ),
+                          itemBuilder: (context, i) {
+                            final rawDate = _comments[i]['commentDate'];
+                            String formattedDate = rawDate ?? "";
+
+                            if (rawDate != null) {
+                              try {
+                                // Parses the ISO 8601 string and formats it
+                                DateTime parsedDate = DateTime.parse(rawDate);
+                                formattedDate = DateFormat('dd MMM yyyy').format(parsedDate);
+                              } catch (e) {
+                                formattedDate = rawDate; // Fallback to raw string if parsing fails
+                              }
+                            }
+
+                            return ListTile(
+                              leading: const CircleAvatar(child: Icon(Icons.person)),
+                              title: Text(_comments[i]['text'] ?? ""),
+                              subtitle: Text(formattedDate),
+                            );
+                          },
                         ),
                       ],
                     ),
@@ -413,11 +541,22 @@ class _PostDetailPageState extends State<PostDetailPage> {
           ),
           Container(
             padding: EdgeInsets.fromLTRB(15, 10, 15, MediaQuery.of(context).padding.bottom + 10),
-            decoration: BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: Colors.grey.shade200))),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border(top: BorderSide(color: Colors.grey.shade200))
+            ),
             child: Row(
               children: [
-                Expanded(child: TextField(controller: _commentController, decoration: const InputDecoration(hintText: "Add a comment...", border: InputBorder.none))),
-                IconButton(icon: const Icon(Icons.send, color: Colors.teal), onPressed: _addComment),
+                Expanded(
+                    child: TextField(
+                        controller: _commentController,
+                        decoration: const InputDecoration(hintText: "Add a comment...", border: InputBorder.none)
+                    )
+                ),
+                IconButton(
+                    icon: const Icon(Icons.send, color: Colors.teal),
+                    onPressed: _addComment
+                ),
               ],
             ),
           )

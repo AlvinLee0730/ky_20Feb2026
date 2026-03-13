@@ -276,6 +276,7 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   Future<void> _register() async {
+<<<<<<< ken
     if (_isLoading) return;
     if (_nameErrorText != null ||
         _emailErrorText != null ||
@@ -291,9 +292,12 @@ class _RegisterPageState extends State<RegisterPage> {
       return;
     }
 
+=======
+>>>>>>> master
     setState(() => _isLoading = true);
 
     try {
+<<<<<<< ken
       final email = _emailController.text.trim().toLowerCase();
       final password = _passwordController.text.trim();
       final res = await supabase.auth.signUp(
@@ -362,14 +366,45 @@ class _RegisterPageState extends State<RegisterPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
         );
+=======
+      // 1. Sign up to Supabase Auth (Creates the 'Account')
+      final AuthResponse res = await supabase.auth.signUp(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
+
+      // 2. Define 'user' so the code knows what 'user.id' is
+      final user = res.user;
+
+      if (user != null) {
+        // 3. Insert into your custom 'users' table
+        await supabase.from('users').insert({
+          'userID': user.id,
+          'userName': _nameController.text.trim(),
+          'userEmail': _emailController.text.trim(),
+          'phoneNumber': _phoneController.text.trim(),
+          'role': 'User', // Default role
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Registration Successful! Please Login.')),
+          );
+          Navigator.pop(context);
+        }
+>>>>>>> master
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
+<<<<<<< ken
           SnackBar(
             content: Text('Registration error: ${e.toString().split('\n').first}'),
             backgroundColor: Colors.redAccent,
           ),
+=======
+          SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Colors.red),
+>>>>>>> master
         );
       }
     } finally {
