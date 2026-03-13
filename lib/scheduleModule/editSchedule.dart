@@ -73,20 +73,104 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
   }
 
   Future<void> _editSchedule() async {
-    if (_selectedType == null || _selectedTitle == null || _selectedDate == null ||
-        _startTime == null || _endTime == null) {
+    // Required fields check
+    if (_selectedType == null ||
+        _selectedTitle == null ||
+        _selectedDate == null ||
+        _startTime == null ||
+        _endTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please fill all required fields')));
+        const SnackBar(
+          content: Text('Please fill in all required fields'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
       return;
     }
 
     setState(() => _isLoading = true);
 
     try {
+      // Prepare date string
       final dateStr =
           "${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2, '0')}-${_selectedDate!.day.toString().padLeft(2, '0')}";
+
+      // New time (minutes)
+      final newStart = _startTime!.hour * 60 + _startTime!.minute;
+      final newEnd = _endTime!.hour * 60 + _endTime!.minute;
+
+      // Query: same pet, same day, **exclude current schedule**
+      final existing = await supabase
+          .from('schedule')
+          .select('startTime, endTime')
+          .eq('petID', widget.schedule['petID'])
+          .eq('date', dateStr)
+          .neq('scheduleID', widget.schedule['scheduleID']); // exclude this record
+
+      bool hasConflict = false;
+
+      for (final s in existing) {
+        final startStr = s['startTime'] as String?;
+        final endStr = s['endTime'] as String?;
+
+        if (startStr == null || endStr == null) continue;
+
+        final startParts = startStr.split(':');
+        final endParts = endStr.split(':');
+
+        if (startParts.length < 2 || endParts.length < 2) continue;
+
+        try {
+          final exStart = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+          final exEnd = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+
+          // Overlap condition
+          if (!(newEnd <= exStart || newStart >= exEnd)) {
+            hasConflict = true;
+            break;
+          }
+        } catch (e) {
+          debugPrint('Invalid time format in existing schedule: $e');
+          continue;
+        }
+      }
+
+      // If conflict → show confirmation dialog
+      if (hasConflict) {
+        final bool? proceed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Time Conflict'),
+            content: Text(
+                'The updated time overlaps with another schedule for this pet on $dateStr.\n\n'
+                    'Are you sure you want to save this change?'
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text(
+                  'Save Anyway',
+                  style: TextStyle(color: Colors.teal),
+                ),
+              ),
+            ],
+          ),
+        );
+
+        if (proceed != true) {
+          if (mounted) setState(() => _isLoading = false);
+          return;
+        }
+      }
+
+      // No conflict or user confirmed → update schedule
       final startStr =
           "${_startTime!.hour.toString().padLeft(2, '0')}:${_startTime!.minute.toString().padLeft(2, '0')}:00";
+
       final endStr =
           "${_endTime!.hour.toString().padLeft(2, '0')}:${_endTime!.minute.toString().padLeft(2, '0')}:00";
 
@@ -126,14 +210,20 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
       );
 
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Schedule updated successfully!')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Schedule updated successfully!')),
+        );
         Navigator.pop(context, true);
       }
     } catch (e) {
+      debugPrint("Update failed: $e");
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Update failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Update failed: ${e.toString().split('\n').first}'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);

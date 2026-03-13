@@ -31,6 +31,24 @@ class _CreatePetPageState extends State<CreatePetPage> {
   bool _loading = false;
   String? _gender;
 
+  bool get _nameHasError       => _name.text.trim().isEmpty;
+  bool get _birthDateHasError  => _birthDate == null;
+  bool get _genderHasError     => _gender == null;
+
+  bool get _weightIsInvalid {
+    if (_weight.text.trim().isEmpty) return false; // optional
+    final value = double.tryParse(_weight.text.trim());
+    return value == null || value < 0;
+  }
+
+  String? get _weightErrorText {
+    if (_weight.text.trim().isEmpty) return null;
+    final value = double.tryParse(_weight.text.trim());
+    if (value == null) return 'please Enter Valid Number';
+    if (value < 0)     return 'Cannot be negative';
+    return null;
+  }
+
   InputDecoration _inputStyle(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
@@ -52,9 +70,24 @@ class _CreatePetPageState extends State<CreatePetPage> {
   }
 
   Future<void> _savePet() async {
-    if (_name.text.isEmpty || _birthDate == null || _gender == null) {
+    // Required fields
+    if (_nameHasError || _birthDateHasError || _genderHasError) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Name, Gender, and Birth Date are required")),
+        const SnackBar(
+          content: Text("Pet name, gender, and birth date are required."),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    // Optional but format-sensitive fields
+    if (_weightIsInvalid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Weight must be a valid non-negative number."),
+          backgroundColor: Colors.orange,
+        ),
       );
       return;
     }
@@ -77,14 +110,16 @@ class _CreatePetPageState extends State<CreatePetPage> {
         'breed': _breed.text.trim(),
         'gender': _gender,
         'birthDate': _birthDate!.toIso8601String(),
-        'weight': double.tryParse(_weight.text) ?? 0.0,
+        'weight': double.tryParse(_weight.text.trim()) ?? 0.0,
         'vaccinationExpiry': _vaccinationExpiry?.toIso8601String(),
         'petPhoto': imageUrl,
         'remarks': _remarks.text.trim(),
         'userID': userId,
       }).select('petID');
 
-      final petID = insertResponse.isNotEmpty ? insertResponse.first['petID'] as String? : null;
+      final petID = insertResponse.isNotEmpty
+          ? insertResponse.first['petID'] as String?
+          : null;
 
       if (petID != null && _vaccinationExpiry != null) {
         await NotificationService.scheduleVaccineReminder(
@@ -97,7 +132,14 @@ class _CreatePetPageState extends State<CreatePetPage> {
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       print('Error saving pet: $e');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Failed to save: ${e.toString().split('\n').first}"),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -125,19 +167,28 @@ class _CreatePetPageState extends State<CreatePetPage> {
               ),
             ),
             const SizedBox(height: 30),
-            TextField(controller: _name, decoration: _inputStyle('Pet Name', Icons.badge)),
-            const SizedBox(height: 15),
+            TextField(
+              controller: _name,
+              decoration: _inputStyle('Pet Name', Icons.badge).copyWith(
+                errorText: _nameHasError ? 'Please enter pet name' : null,
+              ),
+            ),
+
             TextField(
               controller: _weight,
-              keyboardType: TextInputType.number,
-              decoration: _inputStyle('Weight (kg)', Icons.monitor_weight_outlined),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: _inputStyle('Weight (kg)', Icons.monitor_weight_outlined).copyWith(
+                errorText: _weightErrorText,
+              ),
             ),
             const SizedBox(height: 15),
             TextField(controller: _species, decoration: _inputStyle('Species', Icons.category)),
             const SizedBox(height: 15),
             DropdownButtonFormField<String>(
               value: _gender,
-              decoration: _inputStyle('Gender', Icons.wc),
+              decoration: _inputStyle('Gender', Icons.wc).copyWith(
+                errorText: _genderHasError ? 'Please select gender' : null,
+              ),
               items: const [
                 DropdownMenuItem(value: 'Male', child: Text('Male')),
                 DropdownMenuItem(value: 'Female', child: Text('Female')),

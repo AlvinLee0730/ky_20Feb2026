@@ -11,9 +11,10 @@ class EditFoodPage extends StatefulWidget {
 
 class _EditFoodPageState extends State<EditFoodPage> {
   final supabase = Supabase.instance.client;
+  final _formKey = GlobalKey<FormState>(); // 新增 FormKey
 
   // Controllers
-  late TextEditingController _nameController; // 建议设为只读
+  late TextEditingController _nameController;
   late TextEditingController _amountController;
   late TextEditingController _remarksController;
 
@@ -78,7 +79,8 @@ class _EditFoodPageState extends State<EditFoodPage> {
     }
   }
 
-  // ================= 核心：同步删除 Food 和 Nutrition =================
+
+
   Future<void> _deleteFoodAndNutrition() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -97,11 +99,7 @@ class _EditFoodPageState extends State<EditFoodPage> {
 
     if (confirm == true) {
       try {
-        // 1. 删除 Food 记录
         await supabase.from('food').delete().eq('foodID', widget.foodData['foodID']);
-
-        // 2. 删除对应的 Nutrition 记录
-        // 同样使用组合条件匹配
         await supabase.from('nutrition').delete()
             .eq('petID', widget.foodData['petID'])
             .eq('foodName', widget.foodData['foodName'])
@@ -122,54 +120,106 @@ class _EditFoodPageState extends State<EditFoodPage> {
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
         actions: [
-          IconButton(icon: const Icon(Icons.delete_outline), onPressed: _deleteFoodAndNutrition),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            onPressed: _deleteFoodAndNutrition,
+          ),
         ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            // 食物名称设为只读，因为修改名称会破坏与 Library 和 Nutrition 的关联逻辑
-            TextField(
-              controller: _nameController,
-              readOnly: true,
-              decoration: const InputDecoration(
-                labelText: "Food Name (Fixed)",
-                filled: true,
-                fillColor: Color(0xFFF5F5F5),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              // Food Name - read only
+              TextFormField(
+                controller: _nameController,
+                readOnly: true,
+                decoration: const InputDecoration(
+                  labelText: "Food Name (Fixed)",
+                  filled: true,
+                  fillColor: Color(0xFFF5F5F5),
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 15),
+              const SizedBox(height: 15),
 
-            TextField(
-              controller: _amountController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: "Amount (g/ml)", border: OutlineInputBorder()),
-            ),
-            const SizedBox(height: 15),
-
-            TextField(
-              controller: _remarksController,
-              decoration: const InputDecoration(labelText: "Remarks", border: OutlineInputBorder()),
-              maxLines: 3,
-            ),
-
-            const Spacer(),
-
-            ElevatedButton(
-              onPressed: _isUpdating ? null : _updateFoodAndNutrition,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.teal,
-                minimumSize: const Size(double.infinity, 55),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              // Amount - with validation
+              TextFormField(
+                controller: _amountController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: "Amount (g/ml)",
+                  border: OutlineInputBorder(),
+                  hintText: "e.g. 85 or 120.5",
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Please enter amount';
+                  }
+                  final num? numValue = num.tryParse(value);
+                  if (numValue == null) {
+                    return 'Please enter a valid number';
+                  }
+                  if (numValue <= 0) {
+                    return 'Amount must be greater than 0';
+                  }
+                  return null;
+                },
               ),
-              child: _isUpdating
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text("Update Record", style: TextStyle(color: Colors.white, fontSize: 16)),
-            ),
-          ],
+              const SizedBox(height: 15),
+
+              // Remarks - no validation, optional
+              TextFormField(
+                controller: _remarksController,
+                decoration: const InputDecoration(
+                  labelText: "Remarks (optional)",
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 3,
+              ),
+
+              const Spacer(),
+
+              ElevatedButton(
+                onPressed: _isUpdating
+                    ? null
+                    : () {
+                  if (_formKey.currentState!.validate()) {
+                    _updateFoodAndNutrition();
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text("Please fix the errors in the form"),
+                      ),
+                    );
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  minimumSize: const Size(double.infinity, 55),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                child: _isUpdating
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text(
+                  "Update Record",
+                  style: TextStyle(color: Colors.white, fontSize: 16),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _amountController.dispose();
+    _remarksController.dispose();
+    super.dispose();
   }
 }

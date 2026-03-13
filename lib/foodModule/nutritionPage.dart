@@ -68,6 +68,7 @@ class _NutritionPageState extends State<NutritionPage> {
   }
 
   // 2. 从数据库获取今天的营养总和
+  // 2. 从数据库获取今天的营养总和
   Future<void> _fetchTodayNutrition() async {
     setState(() => _isLoading = true);
     final String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
@@ -82,7 +83,7 @@ class _NutritionPageState extends State<NutritionPage> {
 
       double cal = 0.0, pro = 0.0, fat = 0.0, carbs = 0.0, fib = 0.0;
 
-      if (response != null) {
+      if (response.isNotEmpty) {
         for (var row in response) {
           cal += (row['calory'] as num? ?? 0.0).toDouble();
           pro += (row['protein'] as num? ?? 0.0).toDouble();
@@ -92,14 +93,27 @@ class _NutritionPageState extends State<NutritionPage> {
         }
       }
 
-      // Generate Dynamic English Tips
+      // 更豐富的動態提示（全英文）
       String tip = "Your pet's diet looks balanced today!";
+
       if (cal == 0) {
         tip = "No meals recorded today. Time to log some food!";
+      } else if (cal > dailyCaloryGoal * 1.2) {
+        tip = "Calories significantly exceed the daily goal. Consider lighter meals tomorrow.";
       } else if (cal > dailyCaloryGoal) {
-        tip = "Calories exceed the daily goal. Maybe a longer walk?";
-      } else if (pro < 10 && cal > 0) {
-        tip = "Protein levels are low. Consider high-protein treats.";
+        tip = "Calories slightly over the daily goal. A short walk might help!";
+      } else if (cal < dailyCaloryGoal * 0.6) {
+        tip = "Calorie intake is quite low today. Your pet might need more energy.";
+      } else if (pro > 40 && cal > 0) {
+        tip = "Protein intake is very high. Make sure it's from quality sources.";
+      } else if (pro < 8 && cal > 0) {
+        tip = "Protein levels are low. Consider adding high-protein food or treats.";
+      } else if (fat > 35 && cal > 0) {
+        tip = "Fat intake is high today. Balance with leaner options next time.";
+      } else if (fib < 2 && cal > 0) {
+        tip = "Fiber intake is low. More veggies or fiber-rich treats could help digestion.";
+      } else if (carbs > 60 && cal > 0) {
+        tip = "Carbohydrate intake is quite high. Consider moderating carbs tomorrow.";
       }
 
       setState(() {
@@ -110,10 +124,11 @@ class _NutritionPageState extends State<NutritionPage> {
         totalFiber = fib;
         dynamicTip = tip;
       });
-
     } catch (e) {
       debugPrint("Fetch Error: $e");
-      setState(() => dynamicTip = "Failed to load health tips.");
+      setState(() {
+        dynamicTip = "Unable to load today's nutrition data. Please try refreshing later.";
+      });
     } finally {
       setState(() => _isLoading = false);
     }
