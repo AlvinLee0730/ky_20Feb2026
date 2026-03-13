@@ -16,11 +16,14 @@ import 'notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService.init();
+
   await Supabase.initialize(
     url: 'https://pypxpvamkqtnjyhqsycs.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5cHhwdmFta3F0bmp5aHFzeWNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MjAwNzAsImV4cCI6MjA4Njk5NjA3MH0.hhBjN5JK5UpvaOv3FJXPi0KcbmpAdJOlpcMfKUEKqX0',
   );
+
+  await NotificationService.initialize();
+  await NotificationService.refreshRepeatingReminders();
 
   runApp(const PetCareApp());
 }
@@ -51,7 +54,7 @@ class MainNavigation extends StatefulWidget {
 }
 
 class _MainNavigationState extends State<MainNavigation> {
-  int _selectedIndex = 2; // Default to Home (Middle)
+  int _selectedIndex = 2;
 
   final List<Widget> _pages = [
     const ExpenseTrackingPage(), // Index 0
@@ -101,6 +104,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _fetchUserRole();
+
   }
 
   Future<void> _fetchUserRole() async {

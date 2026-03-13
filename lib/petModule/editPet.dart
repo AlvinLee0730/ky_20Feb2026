@@ -91,7 +91,11 @@ class _EditPetPageState extends State<EditPetPage> {
     try {
       final imageUrl = await _uploadImage();
       final userId = supabase.auth.currentUser!.id;
-      final petID = widget.petData['petID'];
+      final petID = widget.petData['petID'] as String;
+
+      // Cancel old notification using petID hash
+      final int oldNotificationId = petID.hashCode.abs();
+      await NotificationService.cancel(oldNotificationId);
 
       await supabase.from('pet').update({
         'petName': _name.text.trim(),
@@ -105,21 +109,27 @@ class _EditPetPageState extends State<EditPetPage> {
         'remarks': _remarks.text.trim(),
       }).eq('petID', petID).eq('userID', userId);
 
-      await NotificationService.cancelNotification(NotificationService.petVaccineNotificationId(petID));
+      // Reschedule vaccination reminder if applicable
       if (_vaccinationExpiry != null) {
-        final reminderTime = DateTime(_vaccinationExpiry!.year, _vaccinationExpiry!.month, _vaccinationExpiry!.day, 9, 0);
-        if (reminderTime.isAfter(DateTime.now())) {
-          await NotificationService.scheduleNotification(
-            id: NotificationService.petVaccineNotificationId(petID),
-            title: 'Vaccination reminder: ${_name.text.trim()}',
-            body: 'Vaccination due today. Remember to schedule the next dose.',
-            scheduledTime: reminderTime,
+        try {
+          await NotificationService.scheduleVaccineReminder(
+            petId: petID,
+            petName: _name.text.trim(),
+            expiryDate: _vaccinationExpiry!,
           );
+        } catch (e) {
+          print('Failed to reschedule vaccine reminder: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Failed to update vaccine reminder: $e')),
+            );
+          }
         }
       }
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
+      print('Error updating pet: $e');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Update failed: $e")));
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -142,12 +152,20 @@ class _EditPetPageState extends State<EditPetPage> {
     if (confirm == true) {
       setState(() => _loading = true);
       try {
-        final petID = widget.petData['petID'];
-        await NotificationService.cancelNotification(NotificationService.petVaccineNotificationId(petID));
+        final petID = widget.petData['petID'] as String;
+        final int notificationId = petID.hashCode.abs();
+        await NotificationService.cancel(notificationId);
+
         await supabase.from('pet').delete().eq('petID', petID);
+
         if (mounted) Navigator.pop(context, true);
       } catch (e) {
         debugPrint("Delete error: $e");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Delete failed: $e")),
+          );
+        }
       } finally {
         if (mounted) setState(() => _loading = false);
       }

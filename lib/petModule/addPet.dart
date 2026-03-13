@@ -21,8 +21,8 @@ class _CreatePetPageState extends State<CreatePetPage> {
   final _name = TextEditingController();
   final _species = TextEditingController();
   final _breed = TextEditingController();
-  final _remarks = TextEditingController();
   final _weight = TextEditingController();
+  final _remarks = TextEditingController();
 
   DateTime? _birthDate;
   DateTime? _vaccinationExpiry;
@@ -54,7 +54,7 @@ class _CreatePetPageState extends State<CreatePetPage> {
   Future<void> _savePet() async {
     if (_name.text.isEmpty || _birthDate == null || _gender == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Name, Gender and Birth Date are required")),
+        const SnackBar(content: Text("Name, Gender, and Birth Date are required")),
       );
       return;
     }
@@ -84,21 +84,19 @@ class _CreatePetPageState extends State<CreatePetPage> {
         'userID': userId,
       }).select('petID');
 
-      final petID = insertResponse.isNotEmpty ? insertResponse.first['petID'] : null;
+      final petID = insertResponse.isNotEmpty ? insertResponse.first['petID'] as String? : null;
+
       if (petID != null && _vaccinationExpiry != null) {
-        final reminderTime = DateTime(_vaccinationExpiry!.year, _vaccinationExpiry!.month, _vaccinationExpiry!.day, 9, 0);
-        if (reminderTime.isAfter(DateTime.now())) {
-          await NotificationService.scheduleNotification(
-            id: NotificationService.petVaccineNotificationId(petID),
-            title: 'Vaccination reminder: ${_name.text.trim()}',
-            body: 'Vaccination due today. Remember to schedule the next dose.',
-            scheduledTime: reminderTime,
-          );
-        }
+        await NotificationService.scheduleVaccineReminder(
+          petId: petID,
+          petName: _name.text.trim(),
+          expiryDate: _vaccinationExpiry!,
+        );
       }
 
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
+      print('Error saving pet: $e');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -130,9 +128,9 @@ class _CreatePetPageState extends State<CreatePetPage> {
             TextField(controller: _name, decoration: _inputStyle('Pet Name', Icons.badge)),
             const SizedBox(height: 15),
             TextField(
-                controller: _weight,
-                keyboardType: TextInputType.number,
-                decoration: _inputStyle('Weight (kg)', Icons.monitor_weight_outlined)
+              controller: _weight,
+              keyboardType: TextInputType.number,
+              decoration: _inputStyle('Weight (kg)', Icons.monitor_weight_outlined),
             ),
             const SizedBox(height: 15),
             TextField(controller: _species, decoration: _inputStyle('Species', Icons.category)),
@@ -204,4 +202,3 @@ class _CreatePetPageState extends State<CreatePetPage> {
     );
   }
 }
-

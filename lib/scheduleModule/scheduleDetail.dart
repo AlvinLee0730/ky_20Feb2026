@@ -26,7 +26,7 @@ class _ScheduleDetailPageState extends State<ScheduleDetailPage> {
     _loadPetName();
   }
 
-  // 从 petID 获取名字，如果 Map 里已经有 petName 就不会重复 fetch
+  // Fetch petName from petID if not already in map
   Future<void> _loadPetName() async {
     if (schedule['petName'] == null && schedule['petID'] != null) {
       final res = await supabase
@@ -50,7 +50,7 @@ class _ScheduleDetailPageState extends State<ScheduleDetailPage> {
       ),
     );
     if (result == true) {
-      Navigator.pop(context, true); // 编辑完成后返回刷新列表
+      Navigator.pop(context, true); // Return to refresh the list after editing
     }
   }
 
@@ -59,23 +59,44 @@ class _ScheduleDetailPageState extends State<ScheduleDetailPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("Delete Schedule?"),
+        content: const Text("This will permanently remove this schedule and its reminders."),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text("Delete", style: TextStyle(color: Colors.red))),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Delete", style: TextStyle(color: Colors.red)),
+          ),
         ],
       ),
     );
 
     if (confirm == true) {
       try {
-        final notifId = int.tryParse(schedule['scheduleID'].toString());
-        if (notifId != null) await NotificationService.cancelNotification(notifId);
-        await supabase.from('schedule').delete().eq('scheduleID', schedule['scheduleID']);
-        Navigator.pop(context, true);
+        final String scheduleID = schedule['scheduleID'] as String;
+
+        // Calculate notification ID consistent with create/edit
+        final int notifId = scheduleID.hashCode.abs();
+
+        // Cancel notifications
+        await NotificationService.cancel(notifId);
+        print('Cancelled schedule notification: scheduleID $scheduleID | notifId $notifId');
+
+        // Delete from Supabase
+        await supabase.from('schedule').delete().eq('scheduleID', scheduleID);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Schedule deleted successfully.')),
+          );
+          Navigator.pop(context, true); // Return and refresh list
+        }
       } catch (e) {
-        debugPrint(e.toString());
+        print('Error deleting schedule: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to delete schedule: $e')),
+          );
+        }
       }
     }
   }
@@ -120,7 +141,7 @@ class _ScheduleDetailPageState extends State<ScheduleDetailPage> {
       body: SingleChildScrollView(
         child: Column(
           children: [
-            // 顶部 info
+            // Top info section
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 40),
@@ -147,7 +168,7 @@ class _ScheduleDetailPageState extends State<ScheduleDetailPage> {
                 ],
               ),
             ),
-            // 内容区域
+            // Content section
             Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
