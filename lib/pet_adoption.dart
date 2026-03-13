@@ -15,21 +15,27 @@ class PetAdoptionPage extends StatefulWidget {
 class _PetAdoptionPageState extends State<PetAdoptionPage> {
   final _supabase = Supabase.instance.client;
   bool _isSaving = false;
-  File? _imageFile;
   String _userRole = 'User';
   final Set<String> _locallyDeletedIds = {};
 
   final _petNameController = TextEditingController();
   final _breedController = TextEditingController();
-  final _ageController = TextEditingController();
+  final _dobController = TextEditingController();
   final _remarkController = TextEditingController();
-  // --- 新增：疫苗详细资料控制器 ---
+
+  // --- 疫苗详细资料控制器 ---
   final _vaccineBrandController = TextEditingController();
   final _vaccineDateController = TextEditingController();
   final _nextDoseController = TextEditingController();
+  final _vaccineRemarkController = TextEditingController();
   bool _vaccinated = false;
 
-  // --- Filter State ---
+  // --- 多图上传状态 ---
+  List<File> _newImageFiles = [];
+
+  // --- 搜索与过滤状态 ---
+  final _searchController = TextEditingController();
+  String _searchQuery = "";
   String _ageFilter = 'All';
   bool? _vaccinatedFilter;
 
@@ -41,6 +47,20 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
   void initState() {
     super.initState();
     _checkUserRole();
+  }
+
+  @override
+  void dispose() {
+    _petNameController.dispose();
+    _breedController.dispose();
+    _dobController.dispose();
+    _remarkController.dispose();
+    _vaccineBrandController.dispose();
+    _vaccineDateController.dispose();
+    _nextDoseController.dispose();
+    _vaccineRemarkController.dispose();
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _checkUserRole() async {
@@ -55,12 +75,27 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
     }
   }
 
-  void _resetFilters() {
-    setState(() {
-      _ageFilter = 'All';
-      _vaccinatedFilter = null;
-      _currentPage = 0;
-    });
+  void _showError(String msg) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.redAccent),
+            SizedBox(width: 10),
+            Text("Attention", style: TextStyle(color: Colors.redAccent)),
+          ],
+        ),
+        content: Text(msg),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("OK", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+          ),
+        ],
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+    );
   }
 
   Future<String> _generateAdoptionID() async {
@@ -72,12 +107,40 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
     return "AP${(nums.last + 1).toString().padLeft(5, '0')}";
   }
 
-  Future<void> _pickImage(StateSetter setModalState) async {
-    final XFile? pickedFile = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 50);
-    if (pickedFile != null) {
-      setModalState(() => _imageFile = File(pickedFile.path));
-      setState(() => _imageFile = File(pickedFile.path));
+  // --- 多图选择逻辑 ---
+  Future<void> _pickImages(StateSetter setModalState) async {
+    final pickedFiles = await ImagePicker().pickMultiImage();
+    if (pickedFiles.isNotEmpty) {
+      setModalState(() {
+        _newImageFiles.addAll(pickedFiles.map((e) => File(e.path)));
+      });
     }
+  }
+
+  Widget _buildImageThumbnail({required File file, required VoidCallback onRemove}) {
+    return Container(
+      margin: const EdgeInsets.only(right: 10),
+      width: 100,
+      height: 100,
+      child: Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.file(file, width: 100, height: 100, fit: BoxFit.cover),
+          ),
+          Positioned(
+            top: 0, right: 0,
+            child: GestureDetector(
+              onTap: onRemove,
+              child: Container(
+                decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                child: const Icon(Icons.cancel, color: Colors.red, size: 24),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _deletePost(String id) async {
@@ -90,29 +153,58 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
   }
 
   Future<void> _submitPost({String? editId, String? existingImageUrl}) async {
-    if (_petNameController.text.isEmpty) return;
+    if (_petNameController.text.isEmpty) {
+      _showError("Please enter the pet's name."); return;
+    }
+    if (_newImageFiles.isEmpty && existingImageUrl == null) {
+      _showError("Please select at least one photo."); return;
+    }
+
+    // 自动计算年龄
+    int calculatedAge = 0;
+    if (_dobController.text.isNotEmpty) {
+      DateTime dob = DateTime.parse(_dobController.text);
+      DateTime now = DateTime.now();
+      calculatedAge = now.year - dob.year;
+      if (now.month < dob.month || (now.month == dob.month && now.day < dob.day)) {
+        calculatedAge--;
+      }
+      if (calculatedAge < 0) calculatedAge = 0;
+    }
+
     setState(() => _isSaving = true);
     try {
       final user = _supabase.auth.currentUser;
-      String? imageUrl = existingImageUrl;
-      if (_imageFile != null) {
-        final fileName = '${DateTime.now().millisecondsSinceEpoch}.png';
-        await _supabase.storage.from('pet_photos').upload(fileName, _imageFile!);
-        imageUrl = _supabase.storage.from('pet_photos').getPublicUrl(fileName);
+      String? imageUrlsStr = existingImageUrl;
+
+      // 上传所有新图片
+      if (_newImageFiles.isNotEmpty) {
+        List<String> finalUrls = existingImageUrl != null && existingImageUrl.isNotEmpty
+            ? existingImageUrl.split(',').where((e) => e.isNotEmpty).toList()
+            : [];
+
+        for (int i = 0; i < _newImageFiles.length; i++) {
+          final file = _newImageFiles[i];
+          final fileName = 'pa_${DateTime.now().millisecondsSinceEpoch}_$i.png';
+          await _supabase.storage.from('pet_photos').upload(fileName, file);
+          finalUrls.add(_supabase.storage.from('pet_photos').getPublicUrl(fileName));
+        }
+        imageUrlsStr = finalUrls.join(',');
       }
 
       final postData = {
         'petName': _petNameController.text.trim(),
         'breed': _breedController.text.trim(),
-        'age': int.tryParse(_ageController.text) ?? 0,
+        'dateOfBirth': _dobController.text.trim(),
+        'age': calculatedAge,
         'vaccinated': _vaccinated,
         'remark': _remarkController.text.trim(),
-        'photoURL': imageUrl,
+        'photoURL': imageUrlsStr,
         'isApproved': _userRole == 'Admin',
-        // --- 新增：保存疫苗资料 ---
         'vaccineBrand': _vaccinated ? _vaccineBrandController.text.trim() : null,
         'lastVaccinationDate': _vaccinated ? _vaccineDateController.text : null,
         'nextDoseDate': _vaccinated ? _nextDoseController.text : null,
+        'vaccineRemark': _vaccinated ? _vaccineRemarkController.text.trim() : null,
       };
 
       if (editId != null) {
@@ -123,162 +215,266 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
         postData['userID'] = user!.id;
         await _supabase.from('adoption_posts').insert(postData);
       }
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Submitted successfully!"), backgroundColor: Colors.green)
+        );
+      }
     } catch (e) {
-      debugPrint(e.toString());
+      _showError(e.toString());
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
+  // --- 筛选弹窗 ---
+  void _showFilterModal() {
+    String tempAge = _ageFilter;
+    bool? tempVaccinated = _vaccinatedFilter;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("Filter Options", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  TextButton(
+                    onPressed: () {
+                      setModalState(() {
+                        tempAge = 'All';
+                        tempVaccinated = null;
+                      });
+                    },
+                    child: const Text("Reset", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                  )
+                ],
+              ),
+              const SizedBox(height: 15),
+
+              DropdownButtonFormField<String>(
+                value: tempAge,
+                decoration: InputDecoration(
+                  labelText: "Age Range",
+                  prefixIcon: const Icon(Icons.hourglass_bottom, color: Colors.teal),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                ),
+                items: ['All', 'Young (0-2)', 'Adult (3-7)', 'Senior (8+)'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                onChanged: (v) => setModalState(() => tempAge = v!),
+              ),
+              const SizedBox(height: 15),
+
+              DropdownButtonFormField<bool?>(
+                value: tempVaccinated,
+                decoration: InputDecoration(
+                  labelText: "Vaccinated",
+                  prefixIcon: const Icon(Icons.health_and_safety, color: Colors.teal),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                ),
+                items: const [
+                  DropdownMenuItem(value: null, child: Text('All')),
+                  DropdownMenuItem(value: true, child: Text('Yes')),
+                  DropdownMenuItem(value: false, child: Text('No')),
+                ],
+                onChanged: (v) => setModalState(() => tempVaccinated = v),
+              ),
+              const SizedBox(height: 25),
+
+              ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    _ageFilter = tempAge;
+                    _vaccinatedFilter = tempVaccinated;
+                    _currentPage = 0;
+                  });
+                  Navigator.pop(ctx);
+                },
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.teal,
+                    minimumSize: const Size(double.infinity, 55),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                ),
+                child: const Text("APPLY FILTERS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(height: 30),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentUser = _supabase.auth.currentUser;
+    final bool hasActiveFilter = _ageFilter != 'All' || _vaccinatedFilter != null;
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Adoption Hub")),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+      backgroundColor: Colors.grey[50],
+      appBar: AppBar(
+        title: const Text("Pet Adoption", style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(60),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Row(
               children: [
                 Expanded(
-                  child: DropdownButtonFormField<String>(
-                    value: _ageFilter,
-                    decoration: const InputDecoration(labelText: 'Age Range', border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10)),
-                    items: ['All', 'Young (0-2)', 'Adult (3-7)', 'Senior (8+)']
-                        .map((label) => DropdownMenuItem(value: label, child: Text(label, style: const TextStyle(fontSize: 12))))
-                        .toList(),
-                    onChanged: (val) => setState(() { _ageFilter = val!; _currentPage = 0; }),
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (val) => setState(() {
+                      _searchQuery = val.toLowerCase();
+                      _currentPage = 0;
+                    }),
+                    decoration: InputDecoration(
+                      hintText: "Search name or breed...",
+                      prefixIcon: const Icon(Icons.search, color: Colors.teal),
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding: EdgeInsets.zero,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none),
+                    ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: DropdownButtonFormField<bool?>(
-                    value: _vaccinatedFilter,
-                    decoration: const InputDecoration(labelText: 'Vaccinated', border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10)),
-                    items: const [
-                      DropdownMenuItem(value: null, child: Text('All', style: TextStyle(fontSize: 12))),
-                      DropdownMenuItem(value: true, child: Text('Yes', style: TextStyle(fontSize: 12))),
-                      DropdownMenuItem(value: false, child: Text('No', style: TextStyle(fontSize: 12))),
-                    ],
-                    onChanged: (val) => setState(() { _vaccinatedFilter = val; _currentPage = 0; }),
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: _showFilterModal,
+                  child: Container(
+                    height: 48,
+                    width: 48,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      border: hasActiveFilter ? Border.all(color: Colors.orange, width: 2) : null,
+                    ),
+                    child: Icon(
+                        Icons.filter_list,
+                        color: hasActiveFilter ? Colors.orange : Colors.teal
+                    ),
                   ),
-                ),
-                const SizedBox(width: 4),
-                TextButton(
-                    onPressed: _resetFilters,
-                    child: const Text("Reset", style: TextStyle(color: Colors.teal))
-                ),
+                )
               ],
             ),
           ),
+        ),
+      ),
+      body: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: _supabase.from('adoption_posts').stream(primaryKey: ['adoptionPostID']).order('uploadDate', ascending: false),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
-          Expanded(
-            child: StreamBuilder<List<Map<String, dynamic>>>(
-              stream: _supabase.from('adoption_posts').stream(primaryKey: ['adoptionPostID']),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          final filteredPosts = snapshot.data!.where((post) {
+            final id = post['adoptionPostID'].toString();
+            if (_locallyDeletedIds.contains(id)) return false;
 
-                final filteredPosts = snapshot.data!.where((post) {
-                  final id = post['adoptionPostID'].toString();
-                  if (_locallyDeletedIds.contains(id)) return false;
+            bool isApproved = post['isApproved'] == true;
+            bool isOwner = post['userID'] == currentUser?.id;
+            bool isAdmin = _userRole == 'Admin';
+            if (!isApproved && !isOwner && !isAdmin) return false;
 
-                  bool isApproved = post['isApproved'] == true;
-                  bool isOwner = post['userID'] == currentUser?.id;
-                  bool isAdmin = _userRole == 'Admin';
-                  if (!isApproved && !isOwner && !isAdmin) return false;
+            // Search logic
+            final String name = (post['petName'] ?? "").toString().toLowerCase();
+            final String breed = (post['breed'] ?? "").toString().toLowerCase();
+            if (_searchQuery.isNotEmpty && !name.contains(_searchQuery) && !breed.contains(_searchQuery)) {
+              return false;
+            }
 
-                  final int age = post['age'] ?? 0;
-                  bool matchesAge = true;
-                  if (_ageFilter == 'Young (0-2)') matchesAge = age <= 2;
-                  else if (_ageFilter == 'Adult (3-7)') matchesAge = age >= 3 && age <= 7;
-                  else if (_ageFilter == 'Senior (8+)') matchesAge = age >= 8;
+            final int age = post['age'] ?? 0;
+            bool matchesAge = true;
+            if (_ageFilter == 'Young (0-2)') matchesAge = age <= 2;
+            else if (_ageFilter == 'Adult (3-7)') matchesAge = age >= 3 && age <= 7;
+            else if (_ageFilter == 'Senior (8+)') matchesAge = age >= 8;
 
-                  bool matchesVaccinated = _vaccinatedFilter == null || (post['vaccinated'] ?? false) == _vaccinatedFilter;
+            bool matchesVaccinated = _vaccinatedFilter == null || (post['vaccinated'] ?? false) == _vaccinatedFilter;
 
-                  return matchesAge && matchesVaccinated;
-                }).toList();
+            return matchesAge && matchesVaccinated;
+          }).toList();
 
-                int totalPosts = filteredPosts.length;
-                int totalPages = (totalPosts / _itemsPerPage).ceil();
-                if (_currentPage >= totalPages && totalPages > 0) _currentPage = totalPages - 1;
+          int totalPosts = filteredPosts.length;
+          int totalPages = (totalPosts / _itemsPerPage).ceil();
+          if (_currentPage >= totalPages && totalPages > 0) _currentPage = totalPages - 1;
 
-                int start = _currentPage * _itemsPerPage;
-                int end = (start + _itemsPerPage > totalPosts) ? totalPosts : start + _itemsPerPage;
+          int start = _currentPage * _itemsPerPage;
+          int end = (start + _itemsPerPage > totalPosts) ? totalPosts : start + _itemsPerPage;
 
-                final pagedPosts = totalPosts > 0 ? filteredPosts.sublist(start, end) : [];
+          final pagedPosts = totalPosts > 0 ? filteredPosts.sublist(start, end) : [];
 
-                if (pagedPosts.isEmpty) return const Center(child: Text("No pets found."));
+          if (pagedPosts.isEmpty) return const Center(child: Text("No pets found."));
 
-                return Column(
-                  children: [
-                    Expanded(
-                      child: GridView.builder(
-                        padding: const EdgeInsets.all(10),
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          childAspectRatio: 0.75,
-                          crossAxisSpacing: 10,
-                          mainAxisSpacing: 10,
-                        ),
-                        itemCount: pagedPosts.length,
-                        itemBuilder: (ctx, i) {
-                          final post = pagedPosts[i];
-                          return _buildGridItem(post, currentUser?.id);
-                        },
-                      ),
-                    ),
-                    if (totalPages > 1)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 15),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.arrow_back_ios),
-                              onPressed: _currentPage > 0 ? () => setState(() => _currentPage--) : null,
-                            ),
-                            Text("Page ${_currentPage + 1} of $totalPages"),
-                            IconButton(
-                              icon: const Icon(Icons.arrow_forward_ios),
-                              onPressed: _currentPage < totalPages - 1 ? () => setState(() => _currentPage++) : null,
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-          ),
+          return Column(
+            children: [
+              Expanded(
+                child: GridView.builder(
+                  padding: const EdgeInsets.all(16),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    childAspectRatio: 0.75,
+                    crossAxisSpacing: 12,
+                    mainAxisSpacing: 12,
+                  ),
+                  itemCount: pagedPosts.length,
+                  itemBuilder: (ctx, i) {
+                    final post = pagedPosts[i];
+                    return _buildGridItem(post, currentUser?.id);
+                  },
+                ),
+              ),
+              _buildPagination(totalPages == 0 ? 1 : totalPages),
+            ],
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+          onPressed: () => _showForm(),
+          backgroundColor: Colors.teal,
+          child: const Icon(Icons.add, color: Colors.white, size: 30)
+      ),
+    );
+  }
+
+  Widget _buildPagination(int total) {
+    return Container(
+      padding: const EdgeInsets.only(top: 10, bottom: 25),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          IconButton(icon: const Icon(Icons.arrow_back_ios_new, size: 18), onPressed: _currentPage > 0 ? () => setState(() => _currentPage--) : null),
+          Text("Page ${_currentPage + 1} of $total", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+          IconButton(icon: const Icon(Icons.arrow_forward_ios, size: 18), onPressed: _currentPage < total - 1 ? () => setState(() => _currentPage++) : null),
         ],
       ),
-      floatingActionButton: FloatingActionButton(onPressed: () => _showForm(), child: const Icon(Icons.add)),
     );
   }
 
   Widget _buildGridItem(Map<String, dynamic> post, String? currentUserId) {
     bool isPending = post['isApproved'] == false;
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      child: InkWell(
-        onTap: () async {
-          try {
-            final Map<String, dynamic> postData = Map<String, dynamic>.from(post);
-            final userData = await _supabase.from('users').select('userName').eq('userID', post['userID']).single();
-            postData['authorName'] = userData['userName'];
-            postData['authorID'] = post['userID'];
+    String? firstImageUrl;
+    if (post['photoURL'] != null && post['photoURL'].toString().isNotEmpty) {
+      firstImageUrl = post['photoURL'].toString().split(',').first;
+    }
 
-            if (mounted) {
-              Navigator.push(context, MaterialPageRoute(builder: (context) => PetDetailPage(post: postData)));
-            }
-          } catch (e) {
-            if (mounted) Navigator.push(context, MaterialPageRoute(builder: (context) => PetDetailPage(post: post)));
-          }
+    return Card(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      clipBehavior: Clip.antiAlias,
+      elevation: 2,
+      child: InkWell(
+        onTap: () {
+          Navigator.push(context, MaterialPageRoute(builder: (context) => PetDetailPage(post: post)));
         },
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -286,39 +482,29 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
             Expanded(
               child: Stack(
                 children: [
-                  post['photoURL'] != null
-                      ? Image.network(post['photoURL'], width: double.infinity, height: double.infinity, fit: BoxFit.cover)
-                      : Container(color: Colors.grey[300], child: const Center(child: Icon(Icons.pets))),
+                  firstImageUrl != null
+                      ? Image.network(firstImageUrl, width: double.infinity, height: double.infinity, fit: BoxFit.cover)
+                      : Container(color: Colors.grey[200], child: const Center(child: Icon(Icons.pets, color: Colors.grey))),
 
-                  // Pending Status Hint Overlay
                   if (isPending)
-                    Container(
-                      width: double.infinity,
-                      height: double.infinity,
-                      color: Colors.black45,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withOpacity(0.9),
-                            borderRadius: BorderRadius.circular(5),
-                          ),
-                          child: const Text(
-                            "PENDING APPROVAL",
-                            style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                          ),
-                        ),
+                    Positioned(
+                      top: 10, left: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(color: Colors.orange.withOpacity(0.9), borderRadius: BorderRadius.circular(20)),
+                        child: const Text("Pending", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                       ),
                     ),
                 ],
               ),
             ),
             Padding(
-              padding: const EdgeInsets.all(8.0),
+              padding: const EdgeInsets.all(10.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(post['petName'], style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(post['petName'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
                   Text("${post['breed']} • ${post['age']}y", style: const TextStyle(fontSize: 11, color: Colors.grey)),
                   const SizedBox(height: 4),
                   Row(
@@ -328,9 +514,9 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
                       if (post['userID'] == currentUserId || _userRole == 'Admin')
                         Row(
                           children: [
-                            GestureDetector(onTap: () => _showForm(editPost: post), child: const Icon(Icons.edit, size: 16, color: Colors.blue)),
-                            const SizedBox(width: 6),
-                            GestureDetector(onTap: () => _deletePost(post['adoptionPostID']), child: const Icon(Icons.delete, size: 16, color: Colors.red)),
+                            GestureDetector(onTap: () => _showForm(editPost: post), child: const Icon(Icons.edit, size: 16, color: Colors.teal)),
+                            const SizedBox(width: 8),
+                            GestureDetector(onTap: () => _deletePost(post['adoptionPostID']), child: const Icon(Icons.delete, size: 16, color: Colors.redAccent)),
                           ],
                         ),
                     ],
@@ -346,74 +532,129 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
 
   void _showForm({Map<String, dynamic>? editPost}) {
     if (editPost != null) {
-      _petNameController.text = editPost['petName'];
+      _petNameController.text = editPost['petName'] ?? "";
       _breedController.text = editPost['breed'] ?? "";
-      _ageController.text = editPost['age'].toString();
+      _dobController.text = editPost['dateOfBirth'] ?? "";
       _remarkController.text = editPost['remark'] ?? "";
       _vaccinated = editPost['vaccinated'] ?? false;
-      // --- 初始化疫苗字段 ---
       _vaccineBrandController.text = editPost['vaccineBrand'] ?? "";
       _vaccineDateController.text = editPost['lastVaccinationDate'] ?? "";
       _nextDoseController.text = editPost['nextDoseDate'] ?? "";
+      _vaccineRemarkController.text = editPost['vaccineRemark'] ?? "";
     } else {
-      _petNameController.clear(); _breedController.clear(); _ageController.clear(); _remarkController.clear();
-      _vaccineBrandController.clear(); _vaccineDateController.clear(); _nextDoseController.clear();
-      _vaccinated = false; _imageFile = null;
+      _petNameController.clear(); _breedController.clear(); _dobController.clear(); _remarkController.clear();
+      _vaccineBrandController.clear(); _vaccineDateController.clear(); _nextDoseController.clear(); _vaccineRemarkController.clear();
+      _vaccinated = false;
     }
+    _newImageFiles = [];
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setModalState) => Padding(
           padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text("Add Pet Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 15),
-                GestureDetector(
-                  onTap: () => _pickImage(setModalState),
-                  child: Container(
-                    height: 150,
-                    width: double.infinity,
-                    decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(10)),
-                    child: _imageFile != null
-                        ? Image.file(_imageFile!, fit: BoxFit.cover)
-                        : const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [Icon(Icons.camera_alt, size: 40), Text("Upload Pet Photo")],
+                Center(child: Text("Pet Details", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const SizedBox(height: 20),
+
+                if (_newImageFiles.isEmpty && (editPost == null || editPost['photoURL'] == null || editPost['photoURL'].toString().isEmpty))
+                  GestureDetector(
+                    onTap: () => _pickImages(setModalState),
+                    child: Container(
+                      height: 120, width: double.infinity,
+                      decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(15)),
+                      child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.add_a_photo, size: 40, color: Colors.teal), Text("Select Photos *")]),
+                    ),
+                  )
+                else
+                  SizedBox(
+                    height: 100,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      children: [
+                        // 展示之前的图片(如果有)
+                        if (editPost != null && editPost['photoURL'] != null && editPost['photoURL'].toString().isNotEmpty && _newImageFiles.isEmpty)
+                          ...editPost['photoURL'].toString().split(',').where((e) => e.isNotEmpty).map((url) => Container(
+                            margin: const EdgeInsets.only(right: 10),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: Image.network(url, width: 100, height: 100, fit: BoxFit.cover),
+                            ),
+                          )),
+                        // 展示新选的图片
+                        ..._newImageFiles.map((file) => _buildImageThumbnail(
+                            file: file, onRemove: () => setModalState(() => _newImageFiles.remove(file)))),
+                        GestureDetector(
+                          onTap: () => _pickImages(setModalState),
+                          child: Container(
+                            width: 100, height: 100,
+                            decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(10)),
+                            child: const Icon(Icons.add, size: 40, color: Colors.teal),
+                          ),
+                        )
+                      ],
                     ),
                   ),
-                ),
+                const SizedBox(height: 15),
+
                 TextField(controller: _petNameController, decoration: const InputDecoration(labelText: "Pet Name")),
                 TextField(controller: _breedController, decoration: const InputDecoration(labelText: "Breed")),
-                TextField(controller: _ageController, decoration: const InputDecoration(labelText: "Age"), keyboardType: TextInputType.number),
+
+                TextField(
+                  controller: _dobController,
+                  readOnly: true,
+                  decoration: const InputDecoration(labelText: "Date of Birth", prefixIcon: Icon(Icons.calendar_today)), // 换成标准的日历图标
+                  onTap: () async {
+                    DateTime? picked = await showDatePicker(
+                      context: context,
+                      initialDate: DateTime.now(),
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime.now(),
+                      builder: (context, child) => Theme(
+                        data: Theme.of(context).copyWith(
+                          colorScheme: const ColorScheme.light(primary: Colors.teal, onPrimary: Colors.white, onSurface: Colors.black),
+                        ),
+                        child: child!,
+                      ),
+                    );
+                    if (picked != null) {
+                      setModalState(() => _dobController.text = DateFormat('yyyy-MM-dd').format(picked));
+                    }
+                  },
+                ),
+
                 TextField(controller: _remarkController, decoration: const InputDecoration(labelText: "Remarks")),
                 CheckboxListTile(
-                    title: const Text("Vaccinated?"),
+                    title: const Text("Vaccinated?", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
                     value: _vaccinated,
+                    activeColor: Colors.teal,
                     onChanged: (v) => setModalState(() => _vaccinated = v!)
                 ),
 
-                // --- 动态显示疫苗详情 ---
                 if (_vaccinated) ...[
                   const Divider(),
                   TextField(
                       controller: _vaccineBrandController,
-                      decoration: const InputDecoration(labelText: "Vaccine Brand", prefixIcon: Icon(Icons.medication))
+                      decoration: const InputDecoration(labelText: "Vaccine Brand", prefixIcon: Icon(Icons.medication, color: Colors.teal))
                   ),
                   TextField(
                     controller: _vaccineDateController,
                     readOnly: true,
-                    decoration: const InputDecoration(labelText: "Last Vaccination Date", prefixIcon: Icon(Icons.calendar_today)),
+                    decoration: const InputDecoration(labelText: "Last Vaccination Date", prefixIcon: Icon(Icons.calendar_today, color: Colors.teal)),
                     onTap: () async {
                       DateTime? picked = await showDatePicker(
                         context: context,
                         initialDate: DateTime.now(),
                         firstDate: DateTime(2020),
                         lastDate: DateTime.now(),
+                        builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.light(primary: Colors.teal)), child: child!),
                       );
                       if (picked != null) setModalState(() => _vaccineDateController.text = DateFormat('yyyy-MM-dd').format(picked));
                     },
@@ -421,25 +662,35 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
                   TextField(
                     controller: _nextDoseController,
                     readOnly: true,
-                    decoration: const InputDecoration(labelText: "Next Dose Due Date", prefixIcon: Icon(Icons.event_repeat)),
+                    decoration: const InputDecoration(labelText: "Next Dose Due Date", prefixIcon: Icon(Icons.event_repeat, color: Colors.teal)),
                     onTap: () async {
                       DateTime? picked = await showDatePicker(
                         context: context,
                         initialDate: DateTime.now().add(const Duration(days: 30)),
                         firstDate: DateTime.now(),
                         lastDate: DateTime(2030),
+                        builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.light(primary: Colors.teal)), child: child!),
                       );
                       if (picked != null) setModalState(() => _nextDoseController.text = DateFormat('yyyy-MM-dd').format(picked));
                     },
                   ),
+                  TextField(
+                    controller: _vaccineRemarkController,
+                    decoration: const InputDecoration(labelText: "Vaccination Remarks (Optional)", prefixIcon: Icon(Icons.note_alt_outlined, color: Colors.teal)),
+                  ),
                 ],
 
-                const SizedBox(height: 20),
-                _isSaving ? const CircularProgressIndicator() : SizedBox(
+                const SizedBox(height: 25),
+                _isSaving ? const Center(child: CircularProgressIndicator(color: Colors.teal)) : SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () => _submitPost(editId: editPost?['adoptionPostID'], existingImageUrl: editPost?['photoURL']),
-                    child: const Text("Submit Post"),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.teal,
+                        minimumSize: const Size(double.infinity, 50),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                    ),
+                    child: const Text("SUBMIT POST", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                   ),
                 ),
                 const SizedBox(height: 30),
@@ -452,68 +703,181 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
   }
 }
 
-class PetDetailPage extends StatelessWidget {
+class PetDetailPage extends StatefulWidget {
   final Map<String, dynamic> post;
   const PetDetailPage({super.key, required this.post});
 
   @override
+  State<PetDetailPage> createState() => _PetDetailPageState();
+}
+
+class _PetDetailPageState extends State<PetDetailPage> {
+  final _supabase = Supabase.instance.client;
+  String _authorName = "Unknown User";
+  String? _authorPhoto;
+  int _currentImageIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAuthorData();
+  }
+
+  Future<void> _loadAuthorData() async {
+    try {
+      final userRes = await _supabase.from('users').select('userName, userPhoto').eq('userID', widget.post['userID']).maybeSingle();
+      if (mounted && userRes != null) {
+        setState(() {
+          _authorName = userRes['userName'] ?? widget.post['userID'];
+          _authorPhoto = userRes['userPhoto'];
+        });
+      }
+    } catch (e) {
+      debugPrint("Load author error: $e");
+    }
+  }
+
+  void _goToChat(String? targetId, String targetName) {
+    final myId = _supabase.auth.currentUser?.id;
+    if (targetId == null) return;
+    if (targetId == myId) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("You cannot start a chat with yourself.")));
+      return;
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: targetId, title: targetName)));
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final dateStr = post['uploadDate'] ?? DateTime.now().toString();
+    final dateStr = widget.post['uploadDate'] ?? DateTime.now().toString();
     final formattedDate = DateFormat('dd MMM yyyy').format(DateTime.parse(dateStr));
-    final authorName = post['authorName'] ?? "Unknown User";
-    final authorID = post['authorID'];
-    final currentUserID = Supabase.instance.client.auth.currentUser?.id;
+
+    List<String> imageUrls = [];
+    if (widget.post['photoURL'] != null && widget.post['photoURL'].toString().isNotEmpty) {
+      imageUrls = widget.post['photoURL'].toString().split(',').where((e) => e.isNotEmpty).toList();
+    }
 
     return Scaffold(
-      appBar: AppBar(title: Text(post['petName'])),
+      backgroundColor: Colors.grey[50],
+      appBar: AppBar(
+        title: Text(widget.post['petName']),
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (post['photoURL'] != null)
-              Hero(tag: post['adoptionPostID'], child: Image.network(post['photoURL'], width: double.infinity, height: 300, fit: BoxFit.cover))
+            if (imageUrls.isNotEmpty)
+              Stack(
+                alignment: Alignment.bottomCenter,
+                children: [
+                  SizedBox(
+                    height: 300,
+                    child: PageView.builder(
+                      itemCount: imageUrls.length,
+                      onPageChanged: (index) {
+                        setState(() { _currentImageIndex = index; });
+                      },
+                      itemBuilder: (context, index) {
+                        return Image.network(imageUrls[index], fit: BoxFit.cover, width: double.infinity);
+                      },
+                    ),
+                  ),
+                  if (imageUrls.length > 1)
+                    Positioned(
+                      bottom: 10,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(imageUrls.length, (index) {
+                          return Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 3),
+                            width: _currentImageIndex == index ? 10 : 6,
+                            height: _currentImageIndex == index ? 10 : 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _currentImageIndex == index ? Colors.teal : Colors.white70,
+                            ),
+                          );
+                        }),
+                      ),
+                    )
+                ],
+              )
             else
-              Container(height: 300, color: Colors.grey[300], child: const Icon(Icons.pets, size: 100)),
+              Container(height: 300, color: Colors.grey[300], child: const Center(child: Icon(Icons.pets, size: 100, color: Colors.grey))),
 
             Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(post['petName'], style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 4),
+                  Text(widget.post['petName'], style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
 
-                  GestureDetector(
+                  // Clickable Uploaded By
+                  InkWell(
                     onTap: () {
-                      if (authorID == null || authorID == currentUserID) return;
-                      Navigator.push(context, MaterialPageRoute(builder: (context) => ChatPage(targetUserID: authorID, title: authorName)));
+                      final targetId = widget.post['userID'];
+                      _goToChat(targetId, _authorName);
                     },
-                    child: Text(
-                        "Posted by: $authorName",
-                        style: const TextStyle(fontSize: 16, color: Colors.teal, fontWeight: FontWeight.bold, decoration: TextDecoration.underline)
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircleAvatar(
+                            radius: 14,
+                            backgroundColor: Colors.grey.shade200,
+                            backgroundImage: _authorPhoto != null ? NetworkImage(_authorPhoto!) : null,
+                            child: _authorPhoto == null ? const Icon(Icons.person, size: 18, color: Colors.grey) : null,
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              "Posted by $_authorName",
+                              style: const TextStyle(
+                                color: Colors.teal,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.chat, size: 14, color: Colors.teal),
+                        ],
+                      ),
                     ),
                   ),
 
+                  const SizedBox(height: 4),
                   Text("Posted on: $formattedDate", style: const TextStyle(color: Colors.grey)),
-                  const Divider(height: 30),
-                  _rowItem(Icons.pets, "Breed", post['breed'] ?? "Unknown"),
-                  _rowItem(Icons.cake, "Age", "${post['age']} years"),
-                  _rowItem(Icons.verified_user, "Vaccinated", post['vaccinated'] == true ? "Yes" : "No"),
 
-                  // --- 新增：展示详细疫苗信息 ---
-                  if (post['vaccinated'] == true) ...[
-                    if (post['vaccineBrand'] != null && post['vaccineBrand'].toString().isNotEmpty)
-                      _rowItem(Icons.medication, "Brand", post['vaccineBrand']),
-                    if (post['lastVaccinationDate'] != null)
-                      _rowItem(Icons.calendar_today, "Last Dose", post['lastVaccinationDate']),
-                    if (post['nextDoseDate'] != null)
-                      _rowItem(Icons.event_repeat, "Next Due", post['nextDoseDate']),
+                  const Divider(height: 30),
+                  _rowItem(Icons.pets, "Breed", widget.post['breed'] ?? "Unknown"),
+                  if (widget.post['dateOfBirth'] != null)
+                    _rowItem(Icons.calendar_today, "Date of Birth", widget.post['dateOfBirth']),
+                  _rowItem(Icons.hourglass_bottom, "Age", "${widget.post['age']} years"),
+                  _rowItem(Icons.health_and_safety, "Vaccinated", widget.post['vaccinated'] == true ? "Yes" : "No"),
+
+                  if (widget.post['vaccinated'] == true) ...[
+                    if (widget.post['vaccineBrand'] != null && widget.post['vaccineBrand'].toString().isNotEmpty)
+                      _rowItem(Icons.medication, "Brand", widget.post['vaccineBrand']),
+                    if (widget.post['lastVaccinationDate'] != null)
+                      _rowItem(Icons.calendar_month, "Last Dose", widget.post['lastVaccinationDate']),
+                    if (widget.post['nextDoseDate'] != null)
+                      _rowItem(Icons.event_repeat, "Next Due", widget.post['nextDoseDate']),
+                    if (widget.post['vaccineRemark'] != null && widget.post['vaccineRemark'].toString().isNotEmpty)
+                      _rowItem(Icons.note_alt, "Vaccine Remarks", widget.post['vaccineRemark']),
                   ],
 
                   const SizedBox(height: 20),
-                  const Text("Remarks:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text("Remarks:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
                   const SizedBox(height: 5),
-                  Text(post['remark'] ?? "No remarks.", style: const TextStyle(fontSize: 16)),
+                  Text(widget.post['remark'] ?? "No remarks.", style: const TextStyle(fontSize: 16)),
+                  const SizedBox(height: 30),
                 ],
               ),
             ),
@@ -525,13 +889,13 @@ class PetDetailPage extends StatelessWidget {
 
   Widget _rowItem(IconData icon, String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Icon(icon, color: Colors.teal),
-          const SizedBox(width: 10),
-          Text("$label: ", style: const TextStyle(fontWeight: FontWeight.bold)),
-          Text(value),
+          Icon(icon, color: Colors.teal, size: 20),
+          const SizedBox(width: 12),
+          Text("$label: ", style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
+          Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold))),
         ],
       ),
     );

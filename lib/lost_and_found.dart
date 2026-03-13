@@ -4,7 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 
-// Your existing local files
+// 确保您的项目中存在这些本地文件
 import 'chat.dart';
 
 class LostAndFoundPage extends StatefulWidget {
@@ -17,23 +17,38 @@ class LostAndFoundPage extends StatefulWidget {
 class _LostAndFoundPageState extends State<LostAndFoundPage> {
   final _supabase = Supabase.instance.client;
 
-  // Hub & Pagination State
+  // 状态管理
   String _selectedTab = 'Lost';
   int _currentPage = 0;
   final int _itemsPerPage = 6;
 
-  // Search State
-  final _searchController = TextEditingController();
-  bool _isSearching = false;
-  String _searchQuery = "";
+  // --- 替换 Stream 为手动控制的 State 以实现即时刷新 ---
+  List<Map<String, dynamic>> _posts = [];
+  bool _isLoading = true;
 
-  // Form State
+  // --- 搜索与过滤相关状态 ---
+  final _searchController = TextEditingController();
+  String _searchQuery = "";
+  String _filterGender = 'All';
+  DateTime? _filterDate;
+
+  // 表单相关控制器
   final _locationController = TextEditingController();
   final _contactController = TextEditingController();
   final _remarkController = TextEditingController();
-  File? _imageFile;
+  DateTime? _eventDate;
   String _selectedGender = 'Male';
+  String _contactType = 'Phone';
   bool _isSaving = false;
+
+  // --- 多图上传状态 ---
+  List<File> _newImageFiles = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchPosts(); // 初始抓取数据
+  }
 
   @override
   void dispose() {
@@ -44,31 +59,151 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
     super.dispose();
   }
 
+  // --- 核心：抓取数据函数 (支持刷新) ---
+  Future<void> _fetchPosts() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+
+    try {
+      final String table = _selectedTab == 'Lost' ? 'lost_post' : 'found_post';
+      final data = await _supabase.from(table).select().order('uploadDate', ascending: false);
+
+      if (mounted) {
+        setState(() {
+          _posts = List<Map<String, dynamic>>.from(data);
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Fetch error: $e");
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _showError(String msg) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.redAccent),
+            SizedBox(width: 10),
+            Text("Attention", style: TextStyle(color: Colors.redAccent)),
+          ],
+        ),
+        content: Text(msg),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("OK", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+          ),
+        ],
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+    );
+  }
+
+  Future<void> _pickImages(StateSetter setModalState) async {
+    final pickedFiles = await ImagePicker().pickMultiImage();
+    if (pickedFiles.isNotEmpty) {
+      setModalState(() {
+        _newImageFiles.addAll(pickedFiles.map((e) => File(e.path)));
+      });
+    }
+  }
+
+  Widget _buildImageThumbnail({required File file, required VoidCallback onRemove}) {
+    return Container(
+      margin: const EdgeInsets.only(right: 10),
+      width: 100,
+      height: 100,
+      child: Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.file(file, width: 100, height: 100, fit: BoxFit.cover),
+          ),
+          Positioned(
+            top: 0, right: 0,
+            child: GestureDetector(
+              onTap: onRemove,
+              child: Container(
+                decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                child: const Icon(Icons.cancel, color: Colors.red, size: 24),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _submitPost() async {
-    if (_locationController.text.isEmpty || _imageFile == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please add an image and location")));
+    if (_newImageFiles.isEmpty) {
+      _showError("Please select at least one photo.");
       return;
     }
+    if (_locationController.text.trim().isEmpty) {
+      _showError("Please enter the location.");
+      return;
+    }
+    if (_eventDate == null) {
+      _showError("Please select a date.");
+      return;
+    }
+
+    if (_contactType == 'Phone') {
+      String phone = _contactController.text.trim();
+      final reg011 = RegExp(r'^011-\d{8}$');
+      final regNormal = RegExp(r'^01[0,2-9]-\d{7}$');
+
+      if (phone.startsWith('011')) {
+        if (!reg011.hasMatch(phone)) {
+          _showError("Format Error!\n011 numbers must follow: 011-XXXXXXXX (11 digits)");
+          return;
+        }
+      } else {
+        if (!regNormal.hasMatch(phone)) {
+          _showError("Format Error!\nNormal mobile must follow: 01X-XXXXXXX (10 digits)");
+          return;
+        }
+      }
+    } else if (_contactController.text.trim().isEmpty) {
+      _showError("Please enter your social media handle.");
+      return;
+    }
+
+    if (_remarkController.text.length > 100) {
+      _showError("Remark cannot exceed 100 characters.");
+      return;
+    }
+
     setState(() => _isSaving = true);
     try {
       final String table = _selectedTab == 'Lost' ? 'lost_post' : 'found_post';
       final String idKey = _selectedTab == 'Lost' ? 'lostPostID' : 'foundPostID';
+      final String dateKey = _selectedTab == 'Lost' ? 'dateLost' : 'dateFound';
 
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}.png';
-      await _supabase.storage.from('lost_found_photos').upload(fileName, _imageFile!);
-      final imageUrl = _supabase.storage.from('lost_found_photos').getPublicUrl(fileName);
+      List<String> finalUrls = [];
+      for (int i = 0; i < _newImageFiles.length; i++) {
+        final file = _newImageFiles[i];
+        final fileName = 'lf_${DateTime.now().millisecondsSinceEpoch}_$i.png';
+        await _supabase.storage.from('lost_found_photos').upload(fileName, file);
+        finalUrls.add(_supabase.storage.from('lost_found_photos').getPublicUrl(fileName));
+      }
 
       final prefix = _selectedTab == 'Lost' ? 'LPP' : 'FPP';
       final newID = "$prefix${DateTime.now().millisecondsSinceEpoch.toString().substring(8)}";
+      final String formattedContact = "$_contactType: ${_contactController.text.trim()}";
 
       await _supabase.from(table).insert({
         idKey: newID,
         'userID': _supabase.auth.currentUser!.id,
         'gender': _selectedGender,
         'location': _locationController.text.trim(),
-        _selectedTab == 'Lost' ? 'dateLost' : 'dateFound': DateFormat('yyyy-MM-dd').format(DateTime.now()),
-        'photoURL': imageUrl,
-        'contactInfo': _contactController.text.trim(),
+        dateKey: DateFormat('yyyy-MM-dd').format(_eventDate!),
+        'photoURL': finalUrls.join(','),
+        'contactInfo': formattedContact,
         'uploadDate': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'remark': _remarkController.text.trim(),
         'isApproved': false,
@@ -76,11 +211,14 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
 
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Submitted! Waiting for Admin approval.")));
+        _fetchPosts(); // 发布后立即刷新列表
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Submitted successfully! Waiting for approval."), backgroundColor: Colors.green)
+        );
       }
       _clearForm();
     } catch (e) {
-      debugPrint("Error: $e");
+      _showError("Upload failed: $e");
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -90,140 +228,320 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
     _locationController.clear();
     _contactController.clear();
     _remarkController.clear();
-    _imageFile = null;
+    _newImageFiles = [];
+    _eventDate = null;
     _selectedGender = 'Male';
+    _contactType = 'Phone';
+  }
+
+  void _showFilterModal() {
+    String tempGender = _filterGender;
+    DateTime? tempDate = _filterDate;
+    TextEditingController tempLocController = TextEditingController(text: _searchController.text);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("Filter Options", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  TextButton(
+                    onPressed: () {
+                      setModalState(() {
+                        tempGender = 'All';
+                        tempDate = null;
+                        tempLocController.clear();
+                      });
+                    },
+                    child: const Text("Reset", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                  )
+                ],
+              ),
+              const SizedBox(height: 15),
+
+              TextField(
+                controller: tempLocController,
+                decoration: InputDecoration(
+                  labelText: "Location",
+                  prefixIcon: const Icon(Icons.location_on, color: Colors.teal),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                ),
+              ),
+              const SizedBox(height: 15),
+
+              DropdownButtonFormField<String>(
+                value: tempGender,
+                decoration: InputDecoration(
+                  labelText: "Gender",
+                  prefixIcon: const Icon(Icons.pets, color: Colors.teal),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                ),
+                items: ['All', 'Male', 'Female'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                onChanged: (v) => setModalState(() => tempGender = v!),
+              ),
+              const SizedBox(height: 15),
+
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                shape: RoundedRectangleBorder(
+                  side: BorderSide(color: Colors.grey.shade400),
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                leading: const Icon(Icons.calendar_today, color: Colors.teal),
+                title: Text(tempDate == null ? "Select Date" : DateFormat('yyyy-MM-dd').format(tempDate!)),
+                trailing: tempDate != null
+                    ? IconButton(icon: const Icon(Icons.close, color: Colors.red), onPressed: () => setModalState(() => tempDate = null))
+                    : const Icon(Icons.arrow_drop_down),
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: tempDate ?? DateTime.now(),
+                    firstDate: DateTime(2020),
+                    lastDate: DateTime.now(),
+                    builder: (context, child) => Theme(
+                      data: Theme.of(context).copyWith(
+                        colorScheme: const ColorScheme.light(primary: Colors.teal, onPrimary: Colors.white, onSurface: Colors.black),
+                      ),
+                      child: child!,
+                    ),
+                  );
+                  if (picked != null) setModalState(() => tempDate = picked);
+                },
+              ),
+              const SizedBox(height: 25),
+
+              ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    _filterGender = tempGender;
+                    _filterDate = tempDate;
+                    _searchController.text = tempLocController.text;
+                    _searchQuery = tempLocController.text.toLowerCase();
+                    _currentPage = 0;
+                  });
+                  Navigator.pop(ctx);
+                },
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.teal,
+                    minimumSize: const Size(double.infinity, 55),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                ),
+                child: const Text("APPLY FILTERS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(height: 30),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final table = _selectedTab == 'Lost' ? 'lost_post' : 'found_post';
-    final idKey = _selectedTab == 'Lost' ? 'lostPostID' : 'foundPostID';
     final currentUid = _supabase.auth.currentUser?.id;
+    final dateKey = _selectedTab == 'Lost' ? 'dateLost' : 'dateFound';
+    final bool hasActiveFilter = _filterGender != 'All' || _filterDate != null;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: _isSearching
-            ? TextField(
-          controller: _searchController,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: "Search area...",
-            border: InputBorder.none,
-          ),
-          onChanged: (val) {
-            setState(() {
-              _searchQuery = val.toLowerCase();
-              _currentPage = 0;
-            });
-          },
-        )
-            : const Text(
-            "Lost and Found Hub",
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22)
-        ),
-        centerTitle: true,
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        title: const Text("Lost & Found", style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
         elevation: 0,
-        actions: [
-          IconButton(
-            icon: Icon(_isSearching ? Icons.close : Icons.search),
-            onPressed: () {
-              setState(() {
-                _isSearching = !_isSearching;
-                if (!_isSearching) {
-                  _searchController.clear();
-                  _searchQuery = "";
-                }
-              });
-            },
-          )
-        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(60),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (val) => setState(() {
+                      _searchQuery = val.toLowerCase();
+                      _currentPage = 0;
+                    }),
+                    decoration: InputDecoration(
+                      hintText: "Search location...",
+                      prefixIcon: const Icon(Icons.search, color: Colors.teal),
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding: EdgeInsets.zero,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: _showFilterModal,
+                  child: Container(
+                    height: 48,
+                    width: 48,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      border: hasActiveFilter ? Border.all(color: Colors.orange, width: 2) : null,
+                    ),
+                    child: Icon(
+                        Icons.filter_list,
+                        color: hasActiveFilter ? Colors.orange : Colors.teal
+                    ),
+                  ),
+                )
+              ],
+            ),
+          ),
+        ),
       ),
       body: Column(
         children: [
           _buildHubSelector(),
           Expanded(
-            child: StreamBuilder<List<Map<String, dynamic>>>(
-              stream: _supabase.from(table).stream(primaryKey: [idKey]).order('uploadDate', ascending: false),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-
-                // FILTER: Visibility (Approved or Owner) AND Search Query (Area)
-                var data = snapshot.data!.where((post) {
-                  final bool isVisible = (post['isApproved'] == true) || (post['userID'] == currentUid);
-                  final bool matchesSearch = post['location'].toString().toLowerCase().contains(_searchQuery);
-                  return isVisible && matchesSearch;
-                }).toList();
-
-                if (data.isEmpty) return const Center(child: Text("No reports found."));
-
-                int totalPages = (data.length / _itemsPerPage).ceil();
-                if (totalPages == 0) totalPages = 1;
-                int start = _currentPage * _itemsPerPage;
-                int end = (start + _itemsPerPage) > data.length ? data.length : (start + _itemsPerPage);
-                final paged = data.sublist(start, end);
-
-                return Column(
-                  children: [
-                    Expanded(
-                      child: GridView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 12, mainAxisSpacing: 12),
-                        itemCount: paged.length,
-                        itemBuilder: (ctx, i) => _buildPetCard(paged[i]),
-                      ),
-                    ),
-                    _buildPagination(totalPages),
-                  ],
-                );
-              },
-            ),
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _buildFilteredList(currentUid, dateKey),
           ),
         ],
       ),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 60),
-        child: FloatingActionButton(
-          onPressed: _showAddForm,
-          backgroundColor: Colors.teal,
-          child: const Icon(Icons.add, color: Colors.white, size: 30),
-        ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showAddForm,
+        backgroundColor: Colors.teal,
+        child: const Icon(Icons.add, color: Colors.white, size: 30),
       ),
+    );
+  }
+
+  // --- 构建带有下拉刷新与分页的列表 ---
+  Widget _buildFilteredList(String? currentUid, String dateKey) {
+    var data = _posts.where((post) {
+      final bool isVisible = (post['isApproved'] == true) || (post['userID'] == currentUid);
+      final bool matchesLocation = post['location'].toString().toLowerCase().contains(_searchQuery);
+      final bool matchesGender = _filterGender == 'All' || post['gender'] == _filterGender;
+
+      bool matchesDate = true;
+      if (_filterDate != null) {
+        final String? postDateStr = post[dateKey];
+        if (postDateStr != null) {
+          matchesDate = postDateStr == DateFormat('yyyy-MM-dd').format(_filterDate!);
+        } else {
+          matchesDate = false;
+        }
+      }
+
+      return isVisible && matchesLocation && matchesGender && matchesDate;
+    }).toList();
+
+    if (data.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _fetchPosts,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.5,
+              child: const Center(child: Text("No records match your filters.")),
+            ),
+          ],
+        ),
+      );
+    }
+
+    int totalPages = (data.length / _itemsPerPage).ceil();
+    if (_currentPage >= totalPages && totalPages > 0) {
+      _currentPage = totalPages - 1;
+    }
+
+    int start = _currentPage * _itemsPerPage;
+    int end = (start + _itemsPerPage) > data.length ? data.length : (start + _itemsPerPage);
+    final paged = data.sublist(start, end);
+
+    return Column(
+      children: [
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _fetchPosts,
+            child: GridView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 12, mainAxisSpacing: 12),
+              itemCount: paged.length,
+              itemBuilder: (ctx, i) => _buildPetCard(paged[i]),
+            ),
+          ),
+        ),
+        _buildPagination(totalPages == 0 ? 1 : totalPages),
+      ],
     );
   }
 
   Widget _buildHubSelector() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      child: Container(
-        height: 65,
-        padding: const EdgeInsets.all(5),
-        decoration: BoxDecoration(color: const Color(0xFFF1F1F1), borderRadius: BorderRadius.circular(35)),
-        child: Row(
-          children: [
-            _buildBigTab("Lost", Colors.redAccent),
-            _buildBigTab("Found", Colors.teal),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBigTab(String type, Color activeColor) {
-    bool isSel = _selectedTab == type;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() { _selectedTab = type; _currentPage = 0; }),
-        child: Container(
-          decoration: BoxDecoration(color: isSel ? activeColor : Colors.transparent, borderRadius: BorderRadius.circular(30)),
-          child: Center(
-            child: Text("${type.toUpperCase()} HUB",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: isSel ? Colors.white : Colors.grey[500])),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: () {
+                setState(() { _selectedTab = 'Lost'; _currentPage = 0; });
+                _fetchPosts(); // 切换标签时抓取数据
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: _selectedTab == 'Lost' ? Colors.teal : Colors.white,
+                  borderRadius: const BorderRadius.horizontal(left: Radius.circular(20)),
+                  border: Border.all(color: Colors.teal),
+                ),
+                child: Center(
+                  child: Text(
+                    "LOST",
+                    style: TextStyle(
+                      color: _selectedTab == 'Lost' ? Colors.white : Colors.teal,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
+          Expanded(
+            child: GestureDetector(
+              onTap: () {
+                setState(() { _selectedTab = 'Found'; _currentPage = 0; });
+                _fetchPosts(); // 切换标签时抓取数据
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: _selectedTab == 'Found' ? Colors.teal : Colors.white,
+                  borderRadius: const BorderRadius.horizontal(right: Radius.circular(20)),
+                  border: Border.all(color: Colors.teal),
+                ),
+                child: Center(
+                  child: Text(
+                    "FOUND",
+                    style: TextStyle(
+                      color: _selectedTab == 'Found' ? Colors.white : Colors.teal,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -231,33 +549,37 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
   Widget _buildPetCard(Map<String, dynamic> post) {
     final bool isPending = post['isApproved'] == false;
 
+    String? firstImageUrl;
+    if (post['photoURL'] != null && post['photoURL'].toString().isNotEmpty) {
+      firstImageUrl = post['photoURL'].toString().split(',').first;
+    }
+
     return Card(
-      color: const Color(0xFFF8F7FF),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       clipBehavior: Clip.antiAlias,
+      elevation: 2,
       child: InkWell(
-        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (ctx) => PostDetailPage(post: post, type: _selectedTab))),
+        // --- 修改：从详情页返回后，执行 .then 自动刷新最新数据！---
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (ctx) => PostDetailPage(post: post, type: _selectedTab))).then((_) => _fetchPosts()),
         child: Stack(
           children: [
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                    child: Image.network(
-                      post['photoURL'] ?? '',
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                      color: isPending ? Colors.black.withOpacity(0.4) : null,
-                      colorBlendMode: isPending ? BlendMode.darken : null,
-                    )
+                  child: firstImageUrl != null
+                      ? Image.network(firstImageUrl, fit: BoxFit.cover, width: double.infinity)
+                      : Container(color: Colors.grey[200], child: const Icon(Icons.image_not_supported)),
                 ),
                 Padding(
                   padding: const EdgeInsets.all(10.0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(post['location'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1),
-                      Text(post['gender'] ?? 'Male', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                      Text(post['location'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 4),
+                      Text(post['gender'] ?? 'Unknown', style: const TextStyle(color: Colors.grey, fontSize: 11)),
                     ],
                   ),
                 ),
@@ -265,18 +587,11 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
             ),
             if (isPending)
               Positioned(
-                top: 10,
-                left: 10,
+                top: 10, left: 10,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(color: Colors.orange.withOpacity(0.9), borderRadius: BorderRadius.circular(20)),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.access_time, color: Colors.white, size: 12),
-                      SizedBox(width: 4),
-                      Text("Pending", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
+                  child: const Text("Pending", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                 ),
               ),
           ],
@@ -292,7 +607,7 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           IconButton(icon: const Icon(Icons.arrow_back_ios_new, size: 18), onPressed: _currentPage > 0 ? () => setState(() => _currentPage--) : null),
-          Text("Page ${_currentPage + 1} of $total"),
+          Text("Page ${_currentPage + 1} of $total", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
           IconButton(icon: const Icon(Icons.arrow_forward_ios, size: 18), onPressed: _currentPage < total - 1 ? () => setState(() => _currentPage++) : null),
         ],
       ),
@@ -300,9 +615,12 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
   }
 
   void _showAddForm() {
+    _newImageFiles = [];
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setModalState) => Padding(
@@ -310,27 +628,114 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text("Report Pet", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Center(child: Text("Report ${_selectedTab} Pet", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 const SizedBox(height: 20),
-                GestureDetector(
+
+                if (_newImageFiles.isEmpty)
+                  GestureDetector(
+                    onTap: () => _pickImages(setModalState),
+                    child: Container(
+                      height: 120, width: double.infinity,
+                      decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(15)),
+                      child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.add_a_photo, size: 40, color: Colors.teal), Text("Select Photos *")]),
+                    ),
+                  )
+                else
+                  SizedBox(
+                    height: 100,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      children: [
+                        ..._newImageFiles.map((file) => _buildImageThumbnail(
+                            file: file, onRemove: () => setModalState(() => _newImageFiles.remove(file)))),
+                        GestureDetector(
+                          onTap: () => _pickImages(setModalState),
+                          child: Container(
+                            width: 100, height: 100,
+                            decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(10)),
+                            child: const Icon(Icons.add, size: 40, color: Colors.teal),
+                          ),
+                        )
+                      ],
+                    ),
+                  ),
+
+                const SizedBox(height: 15),
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        value: _selectedGender,
+                        decoration: const InputDecoration(labelText: "Gender"),
+                        items: ['Male', 'Female'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                        onChanged: (v) => setModalState(() => _selectedGender = v!),
+                      ),
+                    ),
+                    const SizedBox(width: 15),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        value: _contactType,
+                        decoration: const InputDecoration(labelText: "Contact Type"),
+                        items: ['Phone', 'Social Media'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                        onChanged: (v) => setModalState(() => _contactType = v!),
+                      ),
+                    ),
+                  ],
+                ),
+                TextField(controller: _locationController, decoration: const InputDecoration(labelText: "Location *", hintText: "e.g. TARUMT Area")),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.calendar_today, color: Colors.teal),
+                  title: Text(_eventDate == null
+                      ? "Select Date ${_selectedTab} *"
+                      : "Date ${_selectedTab}: ${DateFormat('yyyy-MM-dd').format(_eventDate!)}"),
                   onTap: () async {
-                    final p = await ImagePicker().pickImage(source: ImageSource.gallery);
-                    if (p != null) setModalState(() => _imageFile = File(p.path));
+                    final DateTime? picked = await showDatePicker(
+                      context: context,
+                      initialDate: DateTime.now(),
+                      firstDate: DateTime(2024),
+                      lastDate: DateTime.now(),
+                      builder: (context, child) {
+                        return Theme(
+                          data: Theme.of(context).copyWith(
+                            colorScheme: const ColorScheme.light(primary: Colors.teal, onPrimary: Colors.white, onSurface: Colors.black),
+                          ),
+                          child: child!,
+                        );
+                      },
+                    );
+                    if (picked != null) setModalState(() => _eventDate = picked);
                   },
-                  child: Container(
-                    height: 140, width: double.infinity,
-                    decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(20)),
-                    child: _imageFile != null ? ClipRRect(borderRadius: BorderRadius.circular(20), child: Image.file(_imageFile!, fit: BoxFit.cover)) : const Icon(Icons.add_a_photo, color: Colors.teal),
+                ),
+                TextField(
+                    controller: _contactController,
+                    decoration: InputDecoration(
+                        labelText: "Enter $_contactType *",
+                        hintText: _contactType == 'Phone' ? "01X-XXXXXXX" : "@username"
+                    )
+                ),
+                TextField(
+                  controller: _remarkController,
+                  maxLength: 100,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                      labelText: "Remark (Max 100 characters)",
+                      alignLabelWithHint: true,
+                      hintText: "Anything else to add?"
                   ),
                 ),
-                TextField(controller: _locationController, decoration: const InputDecoration(labelText: "Location")),
-                TextField(controller: _contactController, decoration: const InputDecoration(labelText: "Contact Info")),
-                TextField(controller: _remarkController, decoration: const InputDecoration(labelText: "Remark")),
-                const SizedBox(height: 20),
-                _isSaving ? const CircularProgressIndicator() : ElevatedButton(
+                const SizedBox(height: 25),
+                _isSaving
+                    ? const Center(child: CircularProgressIndicator())
+                    : ElevatedButton(
                   onPressed: _submitPost,
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, minimumSize: const Size(double.infinity, 50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal,
+                      minimumSize: const Size(double.infinity, 50),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                  ),
                   child: const Text("SUBMIT FOR APPROVAL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 30),
@@ -343,6 +748,7 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
   }
 }
 
+// --- 详情与编辑页面 ---
 class PostDetailPage extends StatefulWidget {
   final Map<String, dynamic> post;
   final String type;
@@ -355,11 +761,17 @@ class PostDetailPage extends StatefulWidget {
 class _PostDetailPageState extends State<PostDetailPage> {
   final _supabase = Supabase.instance.client;
   bool _isAdmin = false;
-  String _authorName = "Reporter";
+  String _authorName = "Unknown User";
+  String? _authorPhoto;
+  int _currentImageIndex = 0;
+
+  // --- 核心：将静态的 widget.post 转为可变的状态，以便在不退出的情况下刷新UI ---
+  late Map<String, dynamic> _currentPost;
 
   @override
   void initState() {
     super.initState();
+    _currentPost = Map<String, dynamic>.from(widget.post); // 拷贝数据到本地 State
     _loadData();
   }
 
@@ -370,95 +782,160 @@ class _PostDetailPageState extends State<PostDetailPage> {
       final roleRes = await _supabase.from('users').select('role').eq('userID', user.id).maybeSingle();
       if (mounted && roleRes != null) setState(() => _isAdmin = roleRes['role'] == 'Admin');
 
-      final userRes = await _supabase.from('users').select('userName').eq('userID', widget.post['userID']).single();
-      if (mounted) setState(() => _authorName = userRes['userName']);
+      final userRes = await _supabase.from('users').select('userName, userPhoto').eq('userID', _currentPost['userID']).maybeSingle();
+      if (mounted && userRes != null) {
+        setState(() {
+          _authorName = userRes['userName'] ?? _currentPost['userID'];
+          _authorPhoto = userRes['userPhoto'];
+        });
+      }
     } catch (e) {
-      debugPrint("Data load error: $e");
+      debugPrint("Load error: $e");
     }
+  }
+
+  void _goToChat(String? targetId, String targetName) {
+    final myId = _supabase.auth.currentUser?.id;
+    if (targetId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("User information is missing.")));
+      return;
+    }
+    if (targetId == myId) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("You cannot start a chat with yourself.")));
+      return;
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: targetId, title: targetName)));
+  }
+
+  void _showError(String msg) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Validation Failed", style: TextStyle(color: Colors.redAccent)),
+        content: Text(msg),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK", style: TextStyle(color: Colors.teal)))],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isOwner = _supabase.auth.currentUser?.id == widget.post['userID'];
+    // 所有的 widget.post 都改用 _currentPost
+    final bool isOwner = _supabase.auth.currentUser?.id == _currentPost['userID'];
     final bool canModify = isOwner || _isAdmin;
-    final bool isPending = widget.post['isApproved'] == false;
-    final String dateStr = widget.post['uploadDate'] ?? DateTime.now().toString();
-    final formattedDate = DateFormat('dd MMM yyyy').format(DateTime.parse(dateStr));
+    final String dateKey = widget.type == 'Lost' ? 'dateLost' : 'dateFound';
+
+    List<String> imageUrls = [];
+    if (_currentPost['photoURL'] != null && _currentPost['photoURL'].toString().isNotEmpty) {
+      imageUrls = _currentPost['photoURL'].toString().split(',').where((e) => e.isNotEmpty).toList();
+    }
 
     return Scaffold(
+      backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: Text(widget.post['location']),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        title: Text(_currentPost['location']),
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
         elevation: 0,
         actions: [
           if (canModify) ...[
-            IconButton(icon: const Icon(Icons.edit, color: Colors.teal), onPressed: () => _showEditForm(context)),
-            IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: _confirmDelete),
+            IconButton(icon: const Icon(Icons.edit, color: Colors.white), onPressed: () => _showEditForm(context)),
+            IconButton(icon: const Icon(Icons.delete, color: Colors.redAccent), onPressed: _confirmDelete),
           ]
         ],
       ),
       body: SingleChildScrollView(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Stack(
-              children: [
-                Image.network(widget.post['photoURL'] ?? '', height: 300, width: double.infinity, fit: BoxFit.cover),
-                if (isPending)
-                  Container(
-                    height: 300, width: double.infinity, color: Colors.black26,
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                        decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(20)),
-                        child: const Text("PENDING APPROVAL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      ),
+            if (imageUrls.isNotEmpty)
+              Stack(
+                alignment: Alignment.bottomCenter,
+                children: [
+                  SizedBox(
+                    height: 300,
+                    child: PageView.builder(
+                      itemCount: imageUrls.length,
+                      onPageChanged: (index) {
+                        setState(() { _currentImageIndex = index; });
+                      },
+                      itemBuilder: (context, index) {
+                        return Image.network(imageUrls[index], fit: BoxFit.cover, width: double.infinity);
+                      },
                     ),
                   ),
-              ],
-            ),
+                  if (imageUrls.length > 1)
+                    Positioned(
+                      bottom: 10,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(imageUrls.length, (index) {
+                          return Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 3),
+                            width: _currentImageIndex == index ? 10 : 6,
+                            height: _currentImageIndex == index ? 10 : 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _currentImageIndex == index ? Colors.teal : Colors.white70,
+                            ),
+                          );
+                        }),
+                      ),
+                    )
+                ],
+              ),
+
             Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(widget.post['location'], style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 4),
-                  GestureDetector(
+                  Text(_currentPost['location'], style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+
+                  InkWell(
                     onTap: () {
-                      if (isOwner) return;
-                      Navigator.push(context, MaterialPageRoute(
-                          builder: (ctx) => ChatPage(targetUserID: widget.post['userID'], title: _authorName)
-                      ));
+                      final targetId = _currentPost['userID'];
+                      _goToChat(targetId, _authorName);
                     },
-                    child: Text(
-                        "Posted by: ${isOwner ? "You" : _authorName}",
-                        style: const TextStyle(fontSize: 16, color: Colors.teal, fontWeight: FontWeight.bold, decoration: TextDecoration.underline)
-                    ),
-                  ),
-                  Text("Posted on: $formattedDate", style: const TextStyle(color: Colors.grey)),
-                  const Divider(height: 30),
-                  _rowItem(Icons.location_on, "Area", widget.post['location']),
-                  _rowItem(Icons.transgender, "Gender", widget.post['gender'] ?? 'Male'),
-                  _rowItem(Icons.phone, "Contact", widget.post['contactInfo']),
-                  const SizedBox(height: 20),
-                  const Text("Remarks:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 5),
-                  Text(widget.post['remark'] ?? "No remarks.", style: const TextStyle(fontSize: 16)),
-                  const SizedBox(height: 40),
-                  if (!isOwner && !isPending)
-                    ElevatedButton.icon(
-                      onPressed: () => Navigator.push(context, MaterialPageRoute(
-                          builder: (ctx) => ChatPage(targetUserID: widget.post['userID'], title: _authorName)
-                      )),
-                      icon: const Icon(Icons.message),
-                      label: const Text("Message Reporter"),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.teal, foregroundColor: Colors.white,
-                          minimumSize: const Size(double.infinity, 55), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircleAvatar(
+                            radius: 14,
+                            backgroundColor: Colors.grey.shade200,
+                            backgroundImage: _authorPhoto != null ? NetworkImage(_authorPhoto!) : null,
+                            child: _authorPhoto == null ? const Icon(Icons.person, size: 18, color: Colors.grey) : null,
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              "Uploaded by $_authorName",
+                              style: const TextStyle(
+                                color: Colors.teal,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.chat, size: 14, color: Colors.teal),
+                        ],
                       ),
                     ),
+                  ),
+                  const SizedBox(height: 15),
+
+                  _rowItem(Icons.pets, "Gender", _currentPost['gender'] ?? 'Unknown'),
+                  _rowItem(Icons.calendar_today, "Date ${widget.type}", _currentPost[dateKey] ?? "N/A"),
+                  _rowItem(Icons.contact_phone, "Contact Info", _currentPost['contactInfo'] ?? 'N/A'),
+                  const Divider(height: 30),
+                  const Text("Remarks:", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 16)),
+                  const SizedBox(height: 8),
+                  Text(_currentPost['remark'] ?? "None", style: const TextStyle(fontSize: 15)),
+                  const SizedBox(height: 30),
                 ],
               ),
             ),
@@ -470,63 +947,151 @@ class _PostDetailPageState extends State<PostDetailPage> {
 
   Widget _rowItem(IconData icon, String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        children: [
-          Icon(icon, color: Colors.teal),
-          const SizedBox(width: 10),
-          Text("$label: ", style: const TextStyle(fontWeight: FontWeight.bold)),
-          Text(value),
-        ],
-      ),
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Icon(icon, size: 20, color: Colors.teal),
+        const SizedBox(width: 12),
+        Text("$label: ", style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
+        Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold))),
+      ]),
     );
   }
 
   void _confirmDelete() {
     showDialog(context: context, builder: (ctx) => AlertDialog(
-      title: const Text("Delete Post"),
-      content: const Text("Are you sure? This cannot be undone."),
+      title: const Text("Delete Post?"),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel", style: TextStyle(color: Colors.teal))),
         TextButton(onPressed: () async {
           final table = widget.type == 'Lost' ? 'lost_post' : 'found_post';
           final idKey = widget.type == 'Lost' ? 'lostPostID' : 'foundPostID';
-          await _supabase.from(table).delete().eq(idKey, widget.post[idKey]);
-          if (mounted) { Navigator.pop(ctx); Navigator.pop(context); }
+          await _supabase.from(table).delete().eq(idKey, _currentPost[idKey]);
+          if (mounted) {
+            Navigator.pop(ctx); // 关闭确认弹窗
+            Navigator.pop(context); // 关闭详情页，回到列表后会自动触发刷新
+          }
         }, child: const Text("Delete", style: TextStyle(color: Colors.red))),
       ],
     ));
   }
 
   void _showEditForm(BuildContext context) {
-    final loc = TextEditingController(text: widget.post['location']);
-    final rem = TextEditingController(text: widget.post['remark']);
-    final con = TextEditingController(text: widget.post['contactInfo']);
-    String gen = widget.post['gender'] ?? 'Male';
+    final loc = TextEditingController(text: _currentPost['location']);
+    final rem = TextEditingController(text: _currentPost['remark']);
 
-    showModalBottomSheet(context: context, isScrollControlled: true, builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setMState) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text("Edit Report", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          DropdownButtonFormField<String>(
-              value: gen,
-              items: ['Male', 'Female'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-              onChanged: (v) => setMState(() => gen = v!)
+    String initialType = 'Phone';
+    String initialVal = _currentPost['contactInfo'] ?? "";
+    if (initialVal.contains(': ')) {
+      initialType = initialVal.split(': ')[0];
+      initialVal = initialVal.split(': ')[1];
+    }
+    final con = TextEditingController(text: initialVal);
+
+    String currentGen = _currentPost['gender'] ?? 'Male';
+    String currentType = initialType;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setMState) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text("Edit Report Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 15),
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        value: currentGen,
+                        decoration: const InputDecoration(labelText: "Gender"),
+                        items: ['Male', 'Female'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                        onChanged: (v) => setMState(() => currentGen = v!),
+                      ),
+                    ),
+                    const SizedBox(width: 15),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        value: currentType,
+                        decoration: const InputDecoration(labelText: "Contact Type"),
+                        items: ['Phone', 'Social Media'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                        onChanged: (v) => setMState(() => currentType = v!),
+                      ),
+                    ),
+                  ],
+                ),
+                TextField(controller: loc, decoration: const InputDecoration(labelText: "Location")),
+                TextField(controller: con, decoration: InputDecoration(labelText: "Enter $currentType")),
+                TextField(
+                  controller: rem,
+                  maxLength: 100,
+                  maxLines: 2,
+                  decoration: const InputDecoration(labelText: "Remark (Max 100 chars)", alignLabelWithHint: true),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () async {
+                    if (currentType == 'Phone') {
+                      final val = con.text.trim();
+                      final reg011 = RegExp(r'^011-\d{8}$');
+                      final regNormal = RegExp(r'^01[0,2-9]-\d{7}$');
+                      if (val.startsWith('011')) {
+                        if (!reg011.hasMatch(val)) {
+                          _showError("Format for 011 must be 011-XXXXXXXX");
+                          return;
+                        }
+                      } else if (!regNormal.hasMatch(val)) {
+                        _showError("Format must be 01X-XXXXXXX");
+                        return;
+                      }
+                    }
+
+                    if (rem.text.length > 100) {
+                      _showError("Remark is too long (max 100).");
+                      return;
+                    }
+
+                    final table = widget.type == 'Lost' ? 'lost_post' : 'found_post';
+                    final idKey = widget.type == 'Lost' ? 'lostPostID' : 'foundPostID';
+
+                    await _supabase.from(table).update({
+                      'location': loc.text.trim(),
+                      'remark': rem.text.trim(),
+                      'contactInfo': "$currentType: ${con.text.trim()}",
+                      'gender': currentGen,
+                    }).eq(idKey, _currentPost[idKey]);
+
+                    if (mounted) {
+                      Navigator.pop(ctx); // --- 修改：只关闭底部表单弹窗，不退出详情页！---
+
+                      // --- 同步更新本地UI状态，让页面立刻展现修改结果 ---
+                      setState(() {
+                        _currentPost['location'] = loc.text.trim();
+                        _currentPost['remark'] = rem.text.trim();
+                        _currentPost['contactInfo'] = "$currentType: ${con.text.trim()}";
+                        _currentPost['gender'] = currentGen;
+                      });
+
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Post updated successfully!"), backgroundColor: Colors.green));
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal,
+                      minimumSize: const Size(double.infinity, 50),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                  ),
+                  child: const Text("SAVE CHANGES", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(height: 30),
+              ],
+            ),
           ),
-          TextField(controller: loc, decoration: const InputDecoration(labelText: "Location")),
-          TextField(controller: con, decoration: const InputDecoration(labelText: "Contact")),
-          TextField(controller: rem, decoration: const InputDecoration(labelText: "Remark")),
-          const SizedBox(height: 20),
-          ElevatedButton(onPressed: () async {
-            final table = widget.type == 'Lost' ? 'lost_post' : 'found_post';
-            final idKey = widget.type == 'Lost' ? 'lostPostID' : 'foundPostID';
-            await _supabase.from(table).update({'location': loc.text, 'remark': rem.text, 'contactInfo': con.text, 'gender': gen}).eq(idKey, widget.post[idKey]);
-            if (mounted) { Navigator.pop(ctx); Navigator.pop(context); }
-          }, child: const Text("SAVE CHANGES")),
-          const SizedBox(height: 30),
-        ]),
+        ),
       ),
-    ));
+    );
   }
 }

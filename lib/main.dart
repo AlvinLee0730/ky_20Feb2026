@@ -168,7 +168,6 @@ class _HomePageState extends State<HomePage> {
                   _buildMenuCard(context, "Lost & Found", "Report and find missing pets", Icons.location_on, Colors.orange, const LostAndFoundPage()),
                   _buildMenuCard(context, "Pet Adoption", "Find a forever home for pets", Icons.pets, Colors.green, const PetAdoptionPage()),
                   _buildMenuCard(context, "Pet Education", "Learn how to care for your pet", Icons.menu_book, Colors.blue, const EducationPage()),
-                  _buildMenuCard(context, "Expense Tracking", "Manage your pet expenses", Icons.account_balance_wallet, Colors.purple, const ExpenseTrackingPage()),
                   if (_userRole == 'Admin') ...[
                     const Divider(height: 30),
                     const Text("Admin Tools", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
