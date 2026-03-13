@@ -33,6 +33,8 @@ class PetCareApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final session = Supabase.instance.client.auth.currentSession;
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'PetCare Hub',
@@ -41,7 +43,10 @@ class PetCareApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.grey[50],
       ),
-      home: const LoginPage(),
+
+      home: session != null
+          ? const MainNavigation()
+          : const LoginPage(),
     );
   }
 }

@@ -19,12 +19,11 @@ class NutritionHistoryPage extends StatelessWidget {
         foregroundColor: Colors.white,
       ),
       body: FutureBuilder(
-        // 查询该宠物所有日期早于今天 (< today) 的记录
         future: supabase
             .from('nutrition')
             .select()
             .eq('petID', petID)
-            .lt('date', today) // 过滤掉今天的数据
+            .lt('date', today)
             .order('date', ascending: false),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -43,8 +42,7 @@ class NutritionHistoryPage extends StatelessWidget {
             );
           }
 
-          // --- 核心逻辑：按日期分组求和 ---
-          // 因为数据库里一天可能有多次喂食，我们要把同一天的加在一起
+          // 按日期分組求和（原邏輯不變）
           Map<String, Map<String, double>> dailyTotals = {};
 
           for (var row in rawData) {
@@ -57,42 +55,58 @@ class NutritionHistoryPage extends StatelessWidget {
             dailyTotals[date]!['fat'] = dailyTotals[date]!['fat']! + (row['fat'] as num? ?? 0).toDouble();
           }
 
-          // 将 Map 转换为 List 方便显示
           List<String> sortedDates = dailyTotals.keys.toList()..sort((a, b) => b.compareTo(a));
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: sortedDates.length,
-            itemBuilder: (context, index) {
-              String date = sortedDates[index];
-              var stats = dailyTotals[date]!;
-
-              return Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                elevation: 2,
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                  leading: const CircleAvatar(
-                    backgroundColor: Colors.teal,
-                    child: Icon(Icons.calendar_month, color: Colors.white, size: 20),
-                  ),
-                  title: Text(
-                    date,
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      "Calories: ${stats['cal']!.toStringAsFixed(1)} kcal\n"
-                          "Protein: ${stats['pro']!.toStringAsFixed(1)}g | Fat: ${stats['fat']!.toStringAsFixed(1)}g",
-                      style: TextStyle(color: Colors.grey[700], height: 1.4),
-                    ),
-                  ),
-                  trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+          return Column(
+            children: [
+              // 只加這一段提示
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                color: Colors.teal.withOpacity(0.1),
+                child: const Text(
+                  "僅顯示過去記錄，今天的營養請查看當日總覽",
+                  style: TextStyle(color: Colors.teal, fontSize: 14),
+                  textAlign: TextAlign.center,
                 ),
-              );
-            },
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: sortedDates.length,
+                  itemBuilder: (context, index) {
+                    String date = sortedDates[index];
+                    var stats = dailyTotals[date]!;
+
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                      elevation: 2,
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                        leading: const CircleAvatar(
+                          backgroundColor: Colors.teal,
+                          child: Icon(Icons.calendar_month, color: Colors.white, size: 20),
+                        ),
+                        title: Text(
+                          date,
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
+                        subtitle: Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            "Calories: ${stats['cal']!.toStringAsFixed(1)} kcal\n"
+                                "Protein: ${stats['pro']!.toStringAsFixed(1)}g | Fat: ${stats['fat']!.toStringAsFixed(1)}g",
+                            style: TextStyle(color: Colors.grey[700], height: 1.4),
+                          ),
+                        ),
+                        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
           );
         },
       ),

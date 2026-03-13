@@ -27,6 +27,45 @@ class _PetProfilePageState extends State<PetProfilePage> {
     _fetchPets();
   }
 
+  // Helper: Check if vaccine is expiring soon (within 30 days but not expired)
+  bool _isVaccineExpiringSoon(DateTime? expiry) {
+    if (expiry == null) return false;
+    final now = DateTime.now();
+    return expiry.isBefore(now.add(const Duration(days: 30))) && !expiry.isBefore(now);
+  }
+
+  // Helper: Check if vaccine is already expired
+  bool _isVaccineExpired(DateTime? expiry) {
+    if (expiry == null) return false;
+    return expiry.isBefore(DateTime.now());
+  }
+
+  // Helper: Calculate precise age (years, months, or days)
+  String _calculateAge(String? birthDateStr) {
+    if (birthDateStr == null || birthDateStr.isEmpty) return '-';
+
+    final birthDate = DateTime.tryParse(birthDateStr);
+    if (birthDate == null) return '-';
+
+    final now = DateTime.now();
+    int years = now.year - birthDate.year;
+    int months = now.month - birthDate.month;
+    int days = now.day - birthDate.day;
+
+    // Adjust if birthday hasn't occurred this year
+    if (months < 0 || (months == 0 && days < 0)) {
+      years--;
+    }
+
+    if (years > 0) {
+      return '$years yr${years > 1 ? 's' : ''}';
+    } else if (months > 0) {
+      return '$months mo${months > 1 ? 's' : ''}';
+    } else {
+      return '$days day${days > 1 ? 's' : ''}';
+    }
+  }
+
   Future<void> _fetchPets() async {
     setState(() => _loading = true);
     try {
@@ -41,6 +80,17 @@ class _PetProfilePageState extends State<PetProfilePage> {
       });
     } catch (e) {
       debugPrint("Fetch pets error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Failed to load pets. Please try again."),
+            action: SnackBarAction(
+              label: "Retry",
+              onPressed: _fetchPets,
+            ),
+          ),
+        );
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -65,7 +115,7 @@ class _PetProfilePageState extends State<PetProfilePage> {
       ),
       body: Column(
         children: [
-          // ================= 顶部功能区 (Grid Layout) =================
+          // Top quick actions
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -87,7 +137,6 @@ class _PetProfilePageState extends State<PetProfilePage> {
                     ),
                   );
                 }),
-
                 _buildQuickAction(Icons.restaurant, "Food", () {
                   if (_pets.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -95,7 +144,6 @@ class _PetProfilePageState extends State<PetProfilePage> {
                     );
                     return;
                   }
-
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -109,7 +157,7 @@ class _PetProfilePageState extends State<PetProfilePage> {
 
           const SizedBox(height: 10),
 
-          // ================= 宠物列表标题 =================
+          // Pet list title
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
             child: Row(
@@ -121,7 +169,7 @@ class _PetProfilePageState extends State<PetProfilePage> {
             ),
           ),
 
-          // ================= 宠物列表 =================
+          // Pet list
           Expanded(
             child: _pets.isEmpty ? _buildEmptyState() : _buildPetList(),
           ),
@@ -130,7 +178,6 @@ class _PetProfilePageState extends State<PetProfilePage> {
     );
   }
 
-  // 构建顶部圆形功能按钮
   Widget _buildQuickAction(IconData icon, String label, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
@@ -151,8 +198,6 @@ class _PetProfilePageState extends State<PetProfilePage> {
     );
   }
 
-  // ================= 宠物列表 =================
-  // ================= 宠物列表 =================
   Widget _buildPetList() {
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -161,23 +206,27 @@ class _PetProfilePageState extends State<PetProfilePage> {
         final pet = _pets[index];
         final String photoUrl = pet['petPhoto']?.toString() ?? '';
 
-        // --- 逻辑处理：计算年龄 ---
-        String ageText = '-';
-        if (pet['birthDate'] != null) {
-          final birthDate = DateTime.parse(pet['birthDate']);
-          final years = DateTime.now().year - birthDate.year;
-          ageText = '$years yr${years > 1 ? 's' : ''}';
-        }
+        // Calculate age precisely
+        final String ageText = _calculateAge(pet['birthDate']);
 
-        // --- 逻辑处理：判断疫苗是否快过期 ---
-        bool isVaccineExpiring = false;
+        // Vaccine status
+        String vaccineStatus = "Protected";
+        Color vaccineColor = Colors.green;
+
         if (pet['vaccinationExpiry'] != null) {
-          final expiryDate = DateTime.parse(pet['vaccinationExpiry']);
-          // 如果过期时间少于 30 天，显示警告
-          isVaccineExpiring = expiryDate.isBefore(DateTime.now().add(const Duration(days: 30)));
+          final expiryDate = DateTime.tryParse(pet['vaccinationExpiry'].toString());
+          if (expiryDate != null) {
+            if (_isVaccineExpired(expiryDate)) {
+              vaccineStatus = "Expired!";
+              vaccineColor = Colors.red;
+            } else if (_isVaccineExpiringSoon(expiryDate)) {
+              vaccineStatus = "Due soon!";
+              vaccineColor = Colors.orange;
+            }
+          }
         }
 
-        // --- 逻辑处理：体重展示 ---
+        // Weight display
         final weightText = pet['weight'] != null ? "${pet['weight']} kg" : "No weight";
 
         return Container(
@@ -203,7 +252,6 @@ class _PetProfilePageState extends State<PetProfilePage> {
               children: [
                 Text(pet['petName'] ?? '-', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                 const SizedBox(width: 8),
-                // ⭐ 性别图标
                 Icon(
                   pet['gender'] == 'Male' ? Icons.male : Icons.female,
                   size: 16,
@@ -215,22 +263,29 @@ class _PetProfilePageState extends State<PetProfilePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 4),
-                Text('${pet['species']} | ${pet['breed']} | $ageText', style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+                Text(
+                  '${pet['species']} | ${pet['breed']} | $ageText',
+                  style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                ),
                 const SizedBox(height: 4),
                 Row(
                   children: [
-                    // ⭐ 显示体重
+                    // Weight
                     Icon(Icons.monitor_weight_outlined, size: 14, color: themeColor),
                     const SizedBox(width: 4),
-                    Text(weightText, style: TextStyle(color: themeColor, fontSize: 12, fontWeight: FontWeight.bold)),
+                    Text(
+                      weightText,
+                      style: TextStyle(color: themeColor, fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
                     const SizedBox(width: 12),
-                    // ⭐ 疫苗到期提醒
+
+                    // Vaccine status
                     if (pet['vaccinationExpiry'] != null) ...[
-                      Icon(Icons.vaccines, size: 14, color: isVaccineExpiring ? Colors.orange : Colors.grey),
+                      Icon(Icons.vaccines, size: 14, color: vaccineColor),
                       const SizedBox(width: 4),
                       Text(
-                        isVaccineExpiring ? "Vaccine Due!" : "Protected",
-                        style: TextStyle(color: isVaccineExpiring ? Colors.orange : Colors.grey, fontSize: 11),
+                        vaccineStatus,
+                        style: TextStyle(color: vaccineColor, fontSize: 11),
                       ),
                     ]
                   ],
@@ -263,9 +318,10 @@ class _PetProfilePageState extends State<PetProfilePage> {
               if (result == true) _fetchPets();
             },
             style: ElevatedButton.styleFrom(
-                backgroundColor: themeColor,
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+              backgroundColor: themeColor,
+              padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
             child: const Text("Register First Pet", style: TextStyle(color: Colors.white)),
           )
         ],

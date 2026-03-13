@@ -26,7 +26,6 @@ class _SchedulePageState extends State<SchedulePage> {
   // Filter fields
   String? _selectedPetId;
   DateTime? _startDate;
-  DateTime? _endDate;
 
   @override
   void initState() {
@@ -34,12 +33,13 @@ class _SchedulePageState extends State<SchedulePage> {
     _loadSchedules();
   }
 
-  String getPetName(String petID) {
+  String getPetName(dynamic petID) {
+    if (petID == null) return '-';
     final pet = widget.pets.firstWhere(
-          (p) => p['petID'].toString() == petID.toString(),
+          (p) => p['petID']?.toString() == petID.toString(),
       orElse: () => {'petName': '-'},
     );
-    return pet['petName'] ?? '-';
+    return pet['petName'] as String? ?? '-';
   }
 
   Future<void> _loadSchedules() async {
@@ -57,8 +57,9 @@ class _SchedulePageState extends State<SchedulePage> {
           .select()
           .filter('petID', 'in', widget.petIds)
           .order('date', ascending: true);
+
       _schedules = List<Map<String, dynamic>>.from(scheduleResponse);
-      _applyFilter(); // 初始显示全部
+      _applyFilter(); // 初始顯示全部
     } catch (e) {
       debugPrint('Error loading schedules: $e');
       setState(() {
@@ -89,6 +90,11 @@ class _SchedulePageState extends State<SchedulePage> {
 
   Widget _buildScheduleCard(Map<String, dynamic> s) {
     final petName = getPetName(s['petID']);
+    final title = s['title'] as String? ?? 'Untitled';
+    final dateStr = s['date'] as String? ?? '-';
+    final startTime = (s['startTime'] as String?)?.substring(0, 5) ?? '--:--';
+    final endTime = (s['endTime'] as String?)?.substring(0, 5) ?? '--:--';
+
     return Card(
       elevation: 2,
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -100,7 +106,7 @@ class _SchedulePageState extends State<SchedulePage> {
           child: Icon(Icons.calendar_today, color: themeColor),
         ),
         title: Text(
-          s['title'] ?? '-',
+          title,
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
         ),
         subtitle: Padding(
@@ -121,7 +127,7 @@ class _SchedulePageState extends State<SchedulePage> {
                   const Icon(Icons.access_time, size: 14, color: Colors.grey),
                   const SizedBox(width: 4),
                   Flexible(
-                    child: Text('${s['date']} | ${s['startTime']?.substring(0,5)} - ${s['endTime']?.substring(0,5)}'),
+                    child: Text('$dateStr | $startTime - $endTime'),
                   ),
                 ],
               ),
@@ -137,7 +143,6 @@ class _SchedulePageState extends State<SchedulePage> {
   void _openFilterDialog() async {
     String? tempPetId = _selectedPetId;
     DateTime? tempStart = _startDate;
-    DateTime? tempEnd = _endDate;
 
     await showDialog(
       context: context,
@@ -176,43 +181,23 @@ class _SchedulePageState extends State<SchedulePage> {
                     if (picked != null) setDialogState(() => tempStart = picked);
                   },
                 ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(
-                    'To: ${tempEnd?.toLocal().toString().split(' ')[0] ?? 'End Date'}',
-                  ),
-                  trailing: const Icon(Icons.calendar_today),
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: tempEnd ?? DateTime.now(),
-                      firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
-                    );
-                    if (picked != null) setDialogState(() => tempEnd = picked);
-                  },
-                ),
               ],
             ),
           ),
           actions: [
-            // Reset 按钮
             TextButton(
               onPressed: () {
                 setState(() {
                   _selectedPetId = null;
                   _startDate = null;
-                  _endDate = null;
-                  _applyFilter(); // 清空筛选显示所有
+                  _applyFilter();
                 });
-                Navigator.pop(ctx); // 关闭 dialog
+                Navigator.pop(ctx);
               },
               child: const Text('Reset'),
             ),
             TextButton(
-              onPressed: () {
-                Navigator.pop(ctx); // 取消
-              },
+              onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
             ElevatedButton(
@@ -220,8 +205,7 @@ class _SchedulePageState extends State<SchedulePage> {
                 setState(() {
                   _selectedPetId = tempPetId;
                   _startDate = tempStart;
-                  _endDate = tempEnd;
-                  _applyFilter(); // 应用筛选
+                  _applyFilter();
                 });
                 Navigator.pop(ctx);
               },
@@ -236,10 +220,16 @@ class _SchedulePageState extends State<SchedulePage> {
   void _applyFilter() {
     setState(() {
       _filteredSchedules = _schedules.where((s) {
-        bool petMatch = _selectedPetId == null || s['petID'].toString() == _selectedPetId.toString();
-        bool startMatch = _startDate == null || DateTime.parse(s['date']).isAfter(_startDate!.subtract(const Duration(days: 1)));
-        bool endMatch = _endDate == null || DateTime.parse(s['date']).isBefore(_endDate!.add(const Duration(days: 1)));
-        return petMatch && startMatch && endMatch;
+        // 1. 日期比較使用 isAfter / isBefore 的邏輯
+        final scheduleDate = DateTime.tryParse(s['date'] ?? '') ?? DateTime(2000);
+
+        bool petMatch = _selectedPetId == null ||
+            s['petID'].toString() == _selectedPetId.toString();
+
+        bool dateMatch = _startDate == null ||
+            !scheduleDate.isBefore(_startDate!);
+
+        return petMatch && dateMatch;
       }).toList();
     });
   }
@@ -270,8 +260,10 @@ class _SchedulePageState extends State<SchedulePage> {
           children: [
             Icon(Icons.event_note, size: 80, color: Colors.grey[300]),
             const SizedBox(height: 16),
-            const Text('No schedules found. Plan some activities!',
-                style: TextStyle(color: Colors.grey)),
+            const Text(
+              'No schedules found. Plan some activities!',
+              style: TextStyle(color: Colors.grey),
+            ),
           ],
         ),
       )
