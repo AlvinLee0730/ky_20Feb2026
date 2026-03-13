@@ -7,6 +7,7 @@ import 'main.dart';
 
 final supabase = Supabase.instance.client;
 
+// --------------------- LOGIN PAGE ---------------------
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -51,9 +52,22 @@ class _LoginPageState extends State<LoginPage> {
     return null;
   }
 
+  @override
+  void initState() {
+    super.initState();
+    supabase.auth.onAuthStateChange.listen((data) {
+      final AuthChangeEvent event = data.event;
+      if (event == AuthChangeEvent.passwordRecovery && mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const UpdatePasswordPage()),
+        );
+      }
+    });
+  }
+
   Future<void> _login() async {
     if (_isLoading) return;
-
     if (_emailErrorText != null || _passwordErrorText != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -63,7 +77,6 @@ class _LoginPageState extends State<LoginPage> {
       );
       return;
     }
-
     setState(() => _isLoading = true);
 
     try {
@@ -73,19 +86,38 @@ class _LoginPageState extends State<LoginPage> {
       );
 
       if (res.user != null && mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const MainNavigation()),
-        );
+        final userData = await supabase
+            .from('users')
+            .select('accountStatus')
+            .eq('userID', res.user!.id)
+            .single();
+        if (userData['accountStatus'] == 'Deactivated') {
+          await supabase.auth.signOut();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                    'This account has been deactivated. Please contact support.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+          setState(() => _isLoading = false);
+          return;
+        }
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const MainNavigation()),
+          );
+        }
       }
     } on AuthException catch (e) {
       String msg = 'Login failed';
-      if (e.message.contains('Invalid login credentials')) {
-        msg = 'Incorrect email or password';
-      } else if (e.message.contains('network') ||
-          e.message.contains('connection')) {
-        msg = 'Network error. Please check your internet connection';
-      }
+      if (e.message.contains('Invalid login credentials')) msg = 'Incorrect email or password';
+      else if (e.message.contains('network') || e.message.contains('connection')) msg = 'Network error. Please check your internet connection';
+      else if (e.message.contains('Email not confirmed')) msg = 'Please confirm your email before logging in';
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
@@ -94,10 +126,7 @@ class _LoginPageState extends State<LoginPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Unexpected error occurred: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
+          SnackBar(content: Text('Unexpected error occurred: $e'), backgroundColor: Colors.redAccent),
         );
       }
     } finally {
@@ -122,23 +151,18 @@ class _LoginPageState extends State<LoginPage> {
             const SizedBox(height: 40),
             Icon(Icons.lock_person, size: 80, color: themeColor),
             const SizedBox(height: 40),
-
             TextField(
               controller: _emailController,
               decoration: _loginInputStyle('Email', Icons.email),
               keyboardType: TextInputType.emailAddress,
             ),
-
             const SizedBox(height: 16),
-
             TextField(
               controller: _passwordController,
               decoration: _loginInputStyle('Password', Icons.lock),
               obscureText: true,
             ),
-
             const SizedBox(height: 24),
-
             _isLoading
                 ? CircularProgressIndicator(color: themeColor)
                 : ElevatedButton(
@@ -150,12 +174,9 @@ class _LoginPageState extends State<LoginPage> {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(borderRadius)),
               ),
-              child: const Text('LOGIN',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
+              child: const Text('LOGIN', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
-
             const SizedBox(height: 24),
-
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -164,17 +185,14 @@ class _LoginPageState extends State<LoginPage> {
                     context,
                     MaterialPageRoute(builder: (_) => const RegisterPage()),
                   ),
-                  child: Text('Create Account',
-                      style: TextStyle(color: themeColor)),
+                  child: Text('Create Account', style: TextStyle(color: themeColor)),
                 ),
                 TextButton(
                   onPressed: () => Navigator.push(
                     context,
-                    MaterialPageRoute(
-                        builder: (_) => const ForgotPasswordPage()),
+                    MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
                   ),
-                  child: Text('Forgot Password?',
-                      style: TextStyle(color: Colors.grey[600])),
+                  child: Text('Forgot Password?', style: TextStyle(color: Colors.grey[600])),
                 ),
               ],
             ),
@@ -185,7 +203,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-
+// --------------------- REGISTER PAGE ---------------------
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
 
@@ -200,6 +218,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController(); // NEW
   final _phoneController = TextEditingController();
 
   XFile? _pickedImage;
@@ -229,19 +248,16 @@ class _RegisterPageState extends State<RegisterPage> {
   Future<void> _pickImage() async {
     final picker = ImagePicker();
     final picked = await picker.pickImage(source: ImageSource.gallery);
-
-    if (picked != null) {
-      setState(() => _pickedImage = picked);
-    }
+    if (picked != null) setState(() => _pickedImage = picked);
   }
 
   Future<void> _register() async {
     if (_isLoading) return;
 
-    // ---------- Validate inputs on submit (a+b方案) ----------
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
+    final confirmPassword = _confirmPasswordController.text.trim(); // NEW
     final phone = _phoneController.text.trim();
 
     String? errorMsg;
@@ -251,6 +267,8 @@ class _RegisterPageState extends State<RegisterPage> {
       errorMsg = 'Invalid email';
     } else if (password.length < 8) {
       errorMsg = 'Password must be at least 8 characters';
+    } else if (password != confirmPassword) { // NEW
+      errorMsg = 'Passwords do not match';
     } else if (phone.isNotEmpty && _phoneInvalid) {
       errorMsg = 'Invalid Malaysian phone number';
     }
@@ -319,11 +337,7 @@ class _RegisterPageState extends State<RegisterPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Register'),
-        backgroundColor: themeColor,
-        foregroundColor: Colors.white,
-      ),
+      appBar: AppBar(title: const Text('Register'), backgroundColor: themeColor, foregroundColor: Colors.white),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -334,23 +348,20 @@ class _RegisterPageState extends State<RegisterPage> {
                 radius: 50,
                 backgroundColor: Colors.grey[200],
                 backgroundImage: _pickedImage != null ? FileImage(File(_pickedImage!.path)) : null,
-                child: _pickedImage == null
-                    ? Icon(Icons.person, size: 50, color: themeColor)
-                    : null,
+                child: _pickedImage == null ? Icon(Icons.person, size: 50, color: themeColor) : null,
               ),
             ),
-
             const SizedBox(height: 30),
-
             TextField(controller: _nameController, decoration: _regInputStyle('Name', Icons.person)),
             const SizedBox(height: 16),
             TextField(controller: _emailController, decoration: _regInputStyle('Email', Icons.email), keyboardType: TextInputType.emailAddress),
             const SizedBox(height: 16),
             TextField(controller: _passwordController, decoration: _regInputStyle('Password', Icons.lock), obscureText: true),
             const SizedBox(height: 16),
+            TextField(controller: _confirmPasswordController, decoration: _regInputStyle('Confirm Password', Icons.lock_outline), obscureText: true),
+            const SizedBox(height: 16),
             TextField(controller: _phoneController, decoration: _regInputStyle('Phone Number', Icons.phone), keyboardType: TextInputType.phone),
             const SizedBox(height: 32),
-
             _isLoading
                 ? CircularProgressIndicator(color: themeColor)
                 : ElevatedButton(
@@ -359,11 +370,116 @@ class _RegisterPageState extends State<RegisterPage> {
                 backgroundColor: themeColor,
                 foregroundColor: Colors.white,
                 minimumSize: const Size(double.infinity, 55),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(borderRadius),
-                ),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
               ),
               child: const Text('CREATE ACCOUNT', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// --------------------- UPDATE PASSWORD PAGE ---------------------
+class UpdatePasswordPage extends StatefulWidget {
+  const UpdatePasswordPage({super.key});
+
+  @override
+  State<UpdatePasswordPage> createState() => _UpdatePasswordPageState();
+}
+
+class _UpdatePasswordPageState extends State<UpdatePasswordPage> {
+  final Color themeColor = Colors.teal;
+  final double borderRadius = 15.0;
+
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController(); // NEW
+  bool _isLoading = false;
+
+  InputDecoration _inputStyle(String label, IconData icon) {
+    return InputDecoration(
+      labelText: label,
+      prefixIcon: Icon(icon, color: themeColor),
+      filled: true,
+      fillColor: Colors.grey[100],
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(borderRadius),
+        borderSide: BorderSide.none,
+      ),
+    );
+  }
+
+  Future<void> _updatePassword() async {
+    final newPassword = _passwordController.text.trim();
+    final confirmPassword = _confirmPasswordController.text.trim();
+
+    if (newPassword.length < 8) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password must be at least 8 characters long'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    if (newPassword != confirmPassword) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Passwords do not match'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      await supabase.auth.updateUser(UserAttributes(password: newPassword));
+      if (mounted) {
+        await supabase.auth.signOut();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Password updated successfully! Please login with your new password.'),
+            backgroundColor: Colors.teal,
+          ),
+        );
+        Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('New Password'), centerTitle: true, backgroundColor: themeColor, foregroundColor: Colors.white, elevation: 0),
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          children: [
+            const SizedBox(height: 20),
+            const Text("Set your new secure password", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500)),
+            const SizedBox(height: 10),
+            Text("Minimum 8 characters required", style: TextStyle(color: Colors.grey[600])),
+            const SizedBox(height: 40),
+            TextField(controller: _passwordController, decoration: _inputStyle('New Password', Icons.lock_outline), obscureText: true),
+            const SizedBox(height: 16),
+            TextField(controller: _confirmPasswordController, decoration: _inputStyle('Confirm Password', Icons.lock), obscureText: true),
+            const SizedBox(height: 32),
+            _isLoading
+                ? CircularProgressIndicator(color: themeColor)
+                : ElevatedButton(
+              onPressed: _updatePassword,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: themeColor,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 55),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
+              ),
+              child: const Text('UPDATE PASSWORD', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         ),

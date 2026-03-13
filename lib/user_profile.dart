@@ -97,6 +97,63 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  Future<void> _deactivateAccount() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    // Show confirmation dialog
+    bool confirm = await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Deactivate Account'),
+        content: const Text(
+            'Are you sure you want to deactivate your account? You will be logged out immediately.'
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Deactivate', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    ) ?? false;
+
+    if (!confirm) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      // Update account status in "users" table
+      await supabase
+          .from('users')
+          .update({'accountStatus': 'Deactivated'})
+          .eq('userID', user.id);
+
+      // Sign out immediately
+      await supabase.auth.signOut();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Account deactivated.')),
+        );
+        // Navigate to login page and remove all previous routes
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginPage()),
+              (route) => false,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   Future<void> _pickImage() async {
     final picker = ImagePicker();
     final picked = await picker.pickImage(source: ImageSource.gallery);
@@ -234,7 +291,30 @@ class _ProfilePageState extends State<ProfilePage> {
         foregroundColor: Colors.white,
         elevation: 0,
         centerTitle: true,
-      ),
+        // 添加右上角菜单
+        actions: [
+      PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert),
+      onSelected: (value) {
+        if (value == 'deactivate') {
+          _deactivateAccount(); // Make sure the function name matches
+        }
+      },
+      itemBuilder: (BuildContext context) => [
+        const PopupMenuItem(
+          value: 'deactivate',
+          child: Row(
+            children: [
+              Icon(Icons.no_accounts, color: Colors.red),
+              SizedBox(width: 8),
+              Text('Deactivate Account', style: TextStyle(color: Colors.red)),
+            ],
+          ),
+        ),
+      ],
+    ),
+    ],
+    ),
       body: SingleChildScrollView(
         child: Column(
           children: [
