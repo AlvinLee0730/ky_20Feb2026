@@ -115,23 +115,38 @@ class _AddFoodPageState extends State<AddFoodPage> {
         padding: const EdgeInsets.all(20),
         child: Form(
           key: _formKey,
-          child: Column(
+          child:
+          Column(
             children: [
-              // 宠物选择
               DropdownButtonFormField<String>(
                 value: _selectedPetID,
-                decoration: const InputDecoration(labelText: "Select Pet", border: OutlineInputBorder()),
+                decoration: const InputDecoration(
+                  labelText: "Select Pet",
+                  border: OutlineInputBorder(),
+                ),
                 items: widget.pets.map((pet) {
-                  return DropdownMenuItem(value: pet['petID'].toString(), child: Text(pet['petName']));
+                  return DropdownMenuItem(
+                    value: pet['petID'].toString(),
+                    child: Text(pet['petName']),
+                  );
                 }).toList(),
                 onChanged: (val) => setState(() => _selectedPetID = val),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please select a pet';
+                  }
+                  return null;
+                },
               ),
               const SizedBox(height: 15),
 
-              // 食物库选择 (关键修复)
+
               DropdownButtonFormField<Map<String, dynamic>>(
                 value: _selectedLibraryItem,
-                decoration: const InputDecoration(labelText: "Select Food", border: OutlineInputBorder()),
+                decoration: const InputDecoration(
+                  labelText: "Select Food",
+                  border: OutlineInputBorder(),
+                ),
                 items: _libraryItems.map((item) {
                   return DropdownMenuItem(
                     value: item,
@@ -139,43 +154,115 @@ class _AddFoodPageState extends State<AddFoodPage> {
                   );
                 }).toList(),
                 onChanged: (val) => setState(() => _selectedLibraryItem = val),
-                validator: (val) => val == null ? "Please select food" : null,
+                validator: (val) => val == null ? 'Please select a food' : null,
               ),
               const SizedBox(height: 15),
 
-              // 分量输入
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     flex: 2,
                     child: TextFormField(
                       controller: _amountController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: "Amount", border: OutlineInputBorder()),
-                      validator: (val) => val!.isEmpty ? "Enter amount" : null,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: "Amount",
+                        border: OutlineInputBorder(),
+                        hintText: "e.g. 85 or 120.5",
+                      ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Please enter amount';
+                        }
+                        final num? numValue = num.tryParse(value);
+                        if (numValue == null) {
+                          return 'Please enter a valid number';
+                        }
+                        if (numValue <= 0) {
+                          return 'Amount must be greater than 0';
+                        }
+                        return null;
+                      },
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       value: _selectedUnit,
-                      items: ['g', 'ml', 'cup'].map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+                      items: ['g', 'ml', 'cup']
+                          .map((u) => DropdownMenuItem(value: u, child: Text(u)))
+                          .toList(),
                       onChanged: (val) => setState(() => _selectedUnit = val!),
-                      decoration: const InputDecoration(border: OutlineInputBorder()),
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                      ),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 15),
 
-              // 日期
+
               TextFormField(
                 controller: _dateController,
                 readOnly: true,
-                decoration: const InputDecoration(labelText: "Date", suffixIcon: Icon(Icons.calendar_today)),
+                decoration: const InputDecoration(
+                  labelText: "Date",
+                  border: OutlineInputBorder(),
+                  suffixIcon: Icon(Icons.calendar_today),
+                ),
                 onTap: () async {
-                  DateTime? picked = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2000), lastDate: DateTime(2100));
-                  if (picked != null) _dateController.text = DateFormat('yyyy-MM-dd').format(picked);
+                  DateTime? picked = await showDatePicker(
+                    context: context,
+                    initialDate: DateTime.now(),
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime(2100),
+                  );
+                  if (picked != null) {
+                    _dateController.text = DateFormat('yyyy-MM-dd').format(picked);
+                  }
+                },
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please select a date';
+                  }
+                  try {
+                    DateFormat('yyyy-MM-dd').parseStrict(value);
+                  } catch (e) {
+                    return 'Invalid date format';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 15),
+
+              TextFormField(
+                controller: _timeController,
+                readOnly: true,
+                decoration: const InputDecoration(
+                  labelText: "Time",
+                  border: OutlineInputBorder(),
+                  suffixIcon: Icon(Icons.access_time),
+                ),
+                onTap: () async {
+                  TimeOfDay? picked = await showTimePicker(
+                    context: context,
+                    initialTime: TimeOfDay.now(),
+                  );
+                  if (picked != null) {
+                    _timeController.text =
+                    "${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}";
+                  }
+                },
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please select a time';
+                  }
+                  if (!RegExp(r'^\d{2}:\d{2}$').hasMatch(value)) {
+                    return 'Invalid time format';
+                  }
+                  return null;
                 },
               ),
               const SizedBox(height: 25),
@@ -183,13 +270,16 @@ class _AddFoodPageState extends State<AddFoodPage> {
               ElevatedButton(
                 onPressed: _isSaving ? null : _saveFoodAndNutrition,
                 style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.teal,
-                    minimumSize: const Size(double.infinity, 55),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                  backgroundColor: Colors.teal,
+                  minimumSize: const Size(double.infinity, 55),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
                 child: _isSaving
                     ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text("Save Record & Calculate Nutrition", style: TextStyle(color: Colors.white, fontSize: 16)),
+                    : const Text(
+                  "Save Record & Calculate Nutrition",
+                  style: TextStyle(color: Colors.white, fontSize: 16),
+                ),
               ),
             ],
           ),

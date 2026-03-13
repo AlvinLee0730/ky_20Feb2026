@@ -52,21 +52,26 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
     if (d != null) setState(() => _selectedDate = d);
   }
 
-  // 时间选择
+
   Future<void> _pickTime(bool isStart) async {
     final t = await showTimePicker(context: context, initialTime: TimeOfDay.now());
     if (t != null) setState(() => isStart ? _startTime = t : _endTime = t);
   }
 
-  // 创建 Schedule
   Future<void> _createSchedule() async {
+
     if (_selectedPetId == null ||
         _selectedType == null ||
         _selectedTitle == null ||
         _selectedDate == null ||
         _startTime == null ||
         _endTime == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('請填寫所有欄位')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please fill in all fields'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
       return;
     }
 
@@ -75,8 +80,81 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
     try {
       final dateString =
           "${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2, '0')}-${_selectedDate!.day.toString().padLeft(2, '0')}";
+
+
+      final newStart = _startTime!.hour * 60 + _startTime!.minute;
+      final newEnd = _endTime!.hour * 60 + _endTime!.minute;
+
+      final existing = await supabase
+          .from('schedule')
+          .select('startTime, endTime')
+          .eq('petID', _selectedPetId!)
+          .eq('date', dateString);
+
+      bool hasConflict = false;
+
+      for (final s in existing) {
+        final startStr = s['startTime'] as String?;
+        final endStr = s['endTime'] as String?;
+
+        if (startStr == null || endStr == null) continue;
+
+        final startParts = startStr.split(':');
+        final endParts = endStr.split(':');
+
+        if (startParts.length < 2 || endParts.length < 2) continue;
+
+        try {
+          final exStart = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+          final exEnd = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+
+          // Overlap check
+          if (!(newEnd <= exStart || newStart >= exEnd)) {
+            hasConflict = true;
+            break;
+          }
+        } catch (parseError) {
+          debugPrint('Invalid time format, skipping this record: $parseError');
+          continue;
+        }
+      }
+
+      // If time conflict → show confirmation dialog
+      if (hasConflict) {
+        final bool? proceed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Time Conflict'),
+            content: Text(
+                'This pet already has another schedule on $dateString that overlaps with the selected time.\n\n'
+                    'Do you still want to create this schedule?'
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text(
+                  'Create Anyway',
+                  style: TextStyle(color: Colors.teal),
+                ),
+              ),
+            ],
+          ),
+        );
+
+        if (proceed != true) {
+          if (mounted) setState(() => _isLoading = false);
+          return;
+        }
+      }
+
+      // No conflict or user confirmed → insert schedule
       final startTimeString =
           "${_startTime!.hour.toString().padLeft(2, '0')}:${_startTime!.minute.toString().padLeft(2, '0')}:00";
+
       final endTimeString =
           "${_endTime!.hour.toString().padLeft(2, '0')}:${_endTime!.minute.toString().padLeft(2, '0')}:00";
 
@@ -106,23 +184,28 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
         await NotificationService.scheduleEventReminder(
           scheduleId: scheduleID,
           title: _selectedTitle!,
-          description:
-          _descriptionController.text.trim().isNotEmpty ? _descriptionController.text.trim() : null,
+          description: _descriptionController.text.trim().isNotEmpty
+              ? _descriptionController.text.trim()
+              : null,
           startDateTime: startDateTime,
           repeatType: _repeatType,
         );
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Schedule Created Successfully!')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Schedule created successfully!')),
+        );
         Navigator.pop(context, true);
       }
     } catch (e) {
-      debugPrint("Error creating schedule: $e");
+      debugPrint("Failed to create schedule: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Schedule creation failed: $e')),
+          SnackBar(
+            content: Text('Failed to create schedule: ${e.toString().split('\n').first}'),
+            backgroundColor: Colors.redAccent,
+          ),
         );
       }
     } finally {

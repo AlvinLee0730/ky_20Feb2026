@@ -15,7 +15,40 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  // --- 队友的 UI 规范参数 ---
+
+
+  bool get _nameIsEmpty => _nameController.text.trim().isEmpty;
+  bool get _nameTooShort => _nameController.text.trim().length < 3;
+  bool get _nameTooLong  => _nameController.text.trim().length > 30;
+  bool get _nameHasNumber {
+    final name = _nameController.text.trim();
+    return RegExp(r'\d').hasMatch(name);
+  }
+
+  bool get _phoneInvalid {
+    final phone = _phoneController.text.trim();
+    if (phone.isEmpty) return false;
+
+
+    final cleanPhone = phone.replaceAll(RegExp(r'[\s\-]'), '');
+    final regExp = RegExp(r'^(?:\+60|0)1[0-9]{8,9}$');
+    return !regExp.hasMatch(cleanPhone);
+  }
+
+  String? get _nameErrorText {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) return 'Name is required';
+    if (name.length < 3) return 'Name must be at least 3 characters';
+    if (name.length > 30) return 'Name is too long (max 30)';
+    if (_nameHasNumber) return 'Name cannot contain numbers';
+    return null;
+  }
+
+  String? get _phoneErrorText {
+    if (_phoneController.text.trim().isEmpty) return null;
+    if (_phoneInvalid) return 'Invalid Malaysian phone number (e.g. 0123456789 or +60123456789)';
+    return null;
+  }
   final Color themeColor = Colors.teal;
   final double borderRadius = 15.0;
 
@@ -32,7 +65,6 @@ class _ProfilePageState extends State<ProfilePage> {
     _loadUserData();
   }
 
-  // 统一输入框装饰器 (参考队友的 Education/Chat 风格)
   InputDecoration _profileInputStyle(String label, IconData icon) {
     return InputDecoration(
       labelText: label,
@@ -73,26 +105,95 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _saveProfile() async {
     if (_user == null) return;
+
+    // 名字驗證
+    if (_nameIsEmpty || _nameTooShort || _nameTooLong || _nameHasNumber) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_nameErrorText ?? 'Please enter a valid name'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    // 手機驗證（選填）
+    if (_phoneInvalid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Invalid Malaysian phone number format'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
+
     try {
       String imageUrl = _user!.userPhoto ?? '';
+
       if (_pickedImage != null) {
         final bytes = await _pickedImage!.readAsBytes();
-        final filePath = '${_user!.userID}/avatar.png';
+
+        // 1. 大小檢查 (< 5MB)
+        if (bytes.lengthInBytes > 5 * 1024 * 1024) {
+          throw Exception('Image size exceeds 5MB limit');
+        }
+
+        // 2. 類型檢查 (jpg/jpeg/png)
+        final path = _pickedImage!.path.toLowerCase();
+        final isValidType = path.endsWith('.jpg') ||
+            path.endsWith('.jpeg') ||
+            path.endsWith('.png');
+        if (!isValidType) {
+          throw Exception('Only JPG or PNG images are allowed');
+        }
+
+        final extension = path.endsWith('.png') ? 'png' : 'jpg';
+        final filePath = '${_user!.userID}/avatar.$extension';
         await supabase.storage.from('user_photos').uploadBinary(filePath, bytes);
         imageUrl = supabase.storage.from('user_photos').getPublicUrl(filePath);
       }
+
+      // 更新資料
       await supabase.from('users').update({
         'userName': _nameController.text.trim(),
-        'phoneNumber': _phoneController.text.trim(),
+        'phoneNumber': _phoneController.text.trim().isEmpty ? null : _phoneController.text.trim(),
         'userPhoto': imageUrl,
       }).eq('userID', _user!.userID);
-      _loadUserData();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile updated!')));
+
+      // 重新載入資料
+      await _loadUserData();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile updated successfully!')),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      String errorMsg = 'Failed to update profile';
+
+      if (e.toString().contains('5MB')) {
+        errorMsg = 'Image is too large (maximum 5MB)';
+      } else if (e.toString().contains('JPG or PNG')) {
+        errorMsg = 'Only JPG or PNG images are supported';
+      } else if (e.toString().contains('network') || e.toString().contains('connection')) {
+        errorMsg = 'Network error. Please check your internet connection';
+      } else {
+        errorMsg += ': ${e.toString().split('\n').first}';
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -193,9 +294,24 @@ class _ProfilePageState extends State<ProfilePage> {
               child: Column(
                 children: [
                   // 修改 2: 统一风格的输入框
-                  TextField(controller: _nameController, decoration: _profileInputStyle('User Name', Icons.badge)),
-                  const SizedBox(height: 16),
-                  TextField(controller: _phoneController, decoration: _profileInputStyle('Phone Number', Icons.phone)),
+                  TextField(
+                    controller: _nameController,
+                    decoration: _profileInputStyle('User Name', Icons.badge).copyWith(
+                      errorText: _nameErrorText,
+                    ),
+                    onChanged: (_) => setState(() {}), // 即時更新 error
+                  ),
+
+                  const SizedBox(height: 16,),
+
+                  TextField(
+                    controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    decoration: _profileInputStyle('Phone Number', Icons.phone).copyWith(
+                      errorText: _phoneErrorText,
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
 
                   const SizedBox(height: 40),
 
@@ -214,7 +330,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                   const SizedBox(height: 12),
 
-                  // 修改 4: 退出登录按钮 (使用 Outlined 风格，不抢主色调的戏)
+
                   OutlinedButton.icon(
                     onPressed: _signOut,
                     icon: const Icon(Icons.logout),
