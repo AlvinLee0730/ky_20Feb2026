@@ -45,7 +45,20 @@ class PetCareApp extends StatelessWidget {
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.grey[50],
       ),
-      home: session != null ? const MainNavigation() : const LoginPage(),
+      home: StreamBuilder<AuthState>(
+        stream: Supabase.instance.client.auth.onAuthStateChange,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          }
+          final session = snapshot.data?.session;
+          if (session != null) {
+            return const MainNavigation();
+          } else {
+            return const LoginPage();
+          }
+        },
+      ),
     );
   }
 }

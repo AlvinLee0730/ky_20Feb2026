@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:newfypken/foodModule/addFood.dart';
 import 'package:newfypken/foodModule/editFood.dart';
-import 'package:newfypken/foodModule/nutritionPage.dart'; // 假設你有這個
+import 'package:newfypken/foodModule/foodLibraryPage.dart';
+import 'package:newfypken/foodModule/nutritionPage.dart';
 
 class FoodListPage extends StatefulWidget {
   final List<Map<String, dynamic>> pets;
@@ -26,9 +27,8 @@ class _FoodListPageState extends State<FoodListPage> {
   Future<void> _fetchFoodRecords() async {
     setState(() => _isLoading = true);
     try {
-      final List<String> petIds = widget.pets
-          .map((p) => p['petID'].toString())
-          .toList();
+      final List<String> petIds =
+      widget.pets.map((p) => p['petID'].toString()).toList();
 
       if (petIds.isEmpty) {
         setState(() {
@@ -115,10 +115,29 @@ class _FoodListPageState extends State<FoodListPage> {
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.analytics_outlined),
-            onPressed: widget.pets.isEmpty ? null : _showPetSelector,
-            tooltip: widget.pets.isEmpty ? "No pets available" : "Nutrition Analysis",
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              if (value == 'library') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const FoodLibraryPage()),
+                );
+              } else if (value == 'nutrition') {
+                _showPetSelector();
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'library',
+                child: Text("View Food Library"),
+              ),
+              PopupMenuItem(
+                value: 'nutrition',
+                enabled: widget.pets.isNotEmpty,
+                child: const Text("Nutrition Analysis"),
+              ),
+            ],
           ),
         ],
       ),
@@ -140,18 +159,23 @@ class _FoodListPageState extends State<FoodListPage> {
             );
 
             return Card(
-              margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+              margin: const EdgeInsets.symmetric(
+                  horizontal: 15, vertical: 8),
               child: ListTile(
-                leading: const Icon(Icons.fastfood, color: Colors.orange),
-                title: Text("${record['foodName']} (${record['amount']}${record['unit']})"),
-                subtitle: Text("${pet['petName']} • ${_formatDate(record['feedingDate'])}"),
+                leading: const Icon(Icons.fastfood,
+                    color: Colors.orange),
+                title: Text(
+                    "${record['foodName']} (${record['amount']}${record['unit']})"),
+                subtitle: Text(
+                    "${pet['petName']} • ${_formatDate(record['feedingDate'])}"),
                 trailing: IconButton(
                   icon: const Icon(Icons.edit, size: 20),
                   onPressed: () async {
                     final result = await Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => EditFoodPage(foodData: record),
+                        builder: (_) =>
+                            EditFoodPage(foodData: record),
                       ),
                     );
                     if (result == true && mounted) {
@@ -163,7 +187,8 @@ class _FoodListPageState extends State<FoodListPage> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => NutritionPage(petData: pet),
+                      builder: (_) =>
+                          NutritionPage(petData: pet),
                     ),
                   );
                 },
@@ -180,7 +205,8 @@ class _FoodListPageState extends State<FoodListPage> {
         onPressed: () async {
           final result = await Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => AddFoodPage(pets: widget.pets)),
+            MaterialPageRoute(
+                builder: (_) => AddFoodPage(pets: widget.pets)),
           );
           if (result == true && mounted) {
             _fetchFoodRecords();
@@ -208,14 +234,13 @@ class _FoodListPageState extends State<FoodListPage> {
             style: TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 24),
-
           ElevatedButton.icon(
             icon: const Icon(Icons.add),
-             label: const Text("Add Pet"),
-             onPressed: () {
-             // Navigator.push(... AddPetPage ...)
-             },
-           ),
+            label: const Text("Add Pet"),
+            onPressed: () {
+              // Navigator.push(... AddPetPage ...)
+            },
+          ),
         ],
       ),
     );

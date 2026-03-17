@@ -430,12 +430,16 @@ class _UpdatePasswordPageState extends State<UpdatePasswordPage> {
 
     setState(() => _isLoading = true);
     try {
+      // 1. 执行更新密码
       await supabase.auth.updateUser(UserAttributes(password: newPassword));
+
+      // 2. 【关键】强制登出，清理掉重置密码时的临时 Session
+      await supabase.auth.signOut();
+
       if (mounted) {
-        await supabase.auth.signOut();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Password updated successfully! Please login with your new password.'),
+            content: Text('Password updated successfully! Please login.'),
             backgroundColor: Colors.teal,
           ),
         );
