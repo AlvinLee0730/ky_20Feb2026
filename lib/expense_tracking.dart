@@ -16,15 +16,18 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   final _amountController = TextEditingController();
   final _noteController = TextEditingController();
 
+  // 新增：用于自定义分类的控制器和状态
+  final _customCategoryController = TextEditingController();
+  bool _isCustomCategory = false;
+
   String _selectedCategory = 'Pet Food';
   DateTime _selectedDate = DateTime.now();
   DateTime _focusedMonth = DateTime(DateTime.now().year, DateTime.now().month);
   DateTime? _selectedDay;
   bool _isSaving = false;
 
-  // 用于列表过滤的分类状态
+  // 用于列表过滤的当前选中分类
   String _filterCategory = 'All';
-  final List<String> _filterOptions = ['All', 'Pet Food', 'Pet Toy', 'Medical', 'Grooming', 'Others'];
 
   final Map<String, double> _monthlyBudgets = {};
   final double _defaultBudget = 1000.0;
@@ -73,7 +76,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       case 'Pet Toy': return Colors.orange;
       case 'Grooming': return Colors.purpleAccent;
       case 'Others': return Colors.blueGrey;
-      default: return Colors.grey;
+      default: return Colors.grey; // 自定义分类默认使用灰色
     }
   }
 
@@ -83,7 +86,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       case 'Pet Toy': return Icons.toys;
       case 'Medical': return Icons.medical_services;
       case 'Grooming': return Icons.content_cut;
-      default: return Icons.payments;
+      default: return Icons.payments; // 自定义分类默认使用支付图标
     }
   }
 
@@ -103,9 +106,14 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     double lifestyleTotal = 0; // 弹性：玩具、美容、其他
     Map<String, double> categoryTotals = {}; // 记录每个分类的总花费
 
+    // 提取所有出现过的分类，加上默认的几个选项，确保新创建的分类也会出现在筛选栏里
+    Set<String> dynamicFilters = {'All', 'Pet Food', 'Pet Toy', 'Medical', 'Grooming', 'Others'};
+
     for (var e in dateFilteredData) {
-      String cat = e['category'];
+      String cat = e['category'] ?? 'Others';
       double amt = (e['amount'] ?? 0).toDouble();
+
+      dynamicFilters.add(cat);
 
       focusedTotal += amt;
       categoryTotals[cat] = (categoryTotals[cat] ?? 0) + amt;
@@ -129,6 +137,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       'lifestyleTotal': lifestyleTotal,
       'categoryTotals': categoryTotals,
       'displayData': displayData,
+      'filterOptions': dynamicFilters.toList(), // 传出动态分类列表
     };
   }
 
@@ -211,8 +220,8 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
                   ),
                 ),
 
-                // 横向滚动的 Category Filter
-                _buildCategoryFilter(),
+                // 横向滚动的 Category Filter (传入动态分类)
+                _buildCategoryFilter(stats['filterOptions']),
 
                 stats['displayData'].isEmpty
                     ? const Padding(
@@ -406,16 +415,16 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   }
 
   // --- UI 组件: 分类过滤条 ---
-  Widget _buildCategoryFilter() {
+  Widget _buildCategoryFilter(List<String> filterOptions) {
     return Container(
       height: 50,
       margin: const EdgeInsets.only(bottom: 10),
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: _filterOptions.length,
+        itemCount: filterOptions.length,
         itemBuilder: (context, index) {
-          final cat = _filterOptions[index];
+          final cat = filterOptions[index];
           final isSelected = _filterCategory == cat;
           return Padding(
             padding: const EdgeInsets.only(right: 8),
@@ -479,14 +488,30 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   }
 
   void _showExpenseForm({Map<String, dynamic>? existingData}) {
+    List<String> dropdownItems = ['Pet Food', 'Pet Toy', 'Medical', 'Grooming', 'Others', 'Add Custom...'];
+
     if (existingData != null) {
       _amountController.text = existingData['amount'].toString();
       _noteController.text = existingData['note'] ?? "";
-      _selectedCategory = existingData['category'];
       _selectedDate = DateTime.parse(existingData['date']);
+
+      String cat = existingData['category'];
+      // 如果已存在的数据是一个自定义分类，把它加到下拉菜单选项里，防止报错
+      if (!dropdownItems.contains(cat)) {
+        dropdownItems.insert(0, cat);
+      }
+      _selectedCategory = cat;
+      _isCustomCategory = false;
+      _customCategoryController.clear();
     } else {
-      _amountController.clear(); _noteController.clear(); _selectedCategory = 'Pet Food'; _selectedDate = _selectedDay ?? DateTime.now();
+      _amountController.clear();
+      _noteController.clear();
+      _selectedCategory = 'Pet Food';
+      _selectedDate = _selectedDay ?? DateTime.now();
+      _isCustomCategory = false;
+      _customCategoryController.clear();
     }
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -512,12 +537,29 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
               const SizedBox(height: 15),
               TextField(controller: _amountController, decoration: const InputDecoration(labelText: "Amount (RM)", border: OutlineInputBorder()), keyboardType: TextInputType.number),
               const SizedBox(height: 15),
-              DropdownButtonFormField(
+
+              DropdownButtonFormField<String>(
                 value: _selectedCategory,
-                items: ['Pet Food', 'Pet Toy', 'Medical', 'Grooming', 'Others'].map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (v) => setModalState(() => _selectedCategory = v.toString()),
+                items: dropdownItems.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                onChanged: (v) {
+                  setModalState(() {
+                    _selectedCategory = v.toString();
+                    _isCustomCategory = _selectedCategory == 'Add Custom...';
+                  });
+                },
                 decoration: const InputDecoration(labelText: "Category", border: OutlineInputBorder()),
               ),
+
+              // 当选择了 'Add Custom...' 时显示自定义输入框
+              if (_isCustomCategory) ...[
+                const SizedBox(height: 15),
+                TextField(
+                  controller: _customCategoryController,
+                  decoration: const InputDecoration(labelText: "Custom Category Name", border: OutlineInputBorder()),
+                  textCapitalization: TextCapitalization.words,
+                ),
+              ],
+
               const SizedBox(height: 15),
               TextField(controller: _noteController, decoration: const InputDecoration(labelText: "Note (Optional)", border: OutlineInputBorder())),
               const SizedBox(height: 25),
@@ -548,11 +590,21 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       return;
     }
 
+    // 3. 处理最终要保存的 Category
+    String finalCategory = _selectedCategory;
+    if (_isCustomCategory) {
+      if (_customCategoryController.text.trim().isEmpty) {
+        _showErrorDialog('Please enter a custom category name!');
+        return;
+      }
+      finalCategory = _customCategoryController.text.trim();
+    }
+
     setState(() => _isSaving = true);
     try {
       final data = {
         'userID': _currentUID,
-        'category': _selectedCategory,
+        'category': finalCategory, // 使用最终决定的分类
         'amount': parsedAmount,
         'date': DateFormat('yyyy-MM-dd').format(_selectedDate),
         'note': _noteController.text.trim(),
@@ -567,7 +619,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
 
       if (mounted) Navigator.pop(context); // 成功后关闭弹窗
     } catch (e) {
-      // 3. 捕捉错误并弹出提示框
+      // 捕捉错误并弹出提示框
       _showErrorDialog('Error saving record: $e');
     } finally {
       if (mounted) setState(() => _isSaving = false);

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart'; // 🌟 新增：导入日期格式化工具
 
 class AdminApprovalPage extends StatefulWidget {
   const AdminApprovalPage({super.key});
@@ -11,8 +12,67 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
   final _supabase = Supabase.instance.client;
   final Set<String> _processedIds = {};
 
-  // 接收 postOwnerId (发帖者的 userID) 以发送通知
-  Future<void> _handleAction(String id, bool approve, String table, String idField, String? postOwnerId) async {
+  // 万能图片解析器
+  String? _extractImage(Map<String, dynamic> item) {
+    try {
+      final possibleImageKeys = [
+        'imageURL', 'photoURL', 'mediaURLs', 'mediaURL', 'attachedFileURL',
+        'image', 'photo', 'imageUrl', 'photoUrl', 'coverImage', 'coverPhoto'
+      ];
+
+      for (var key in possibleImageKeys) {
+        if (item[key] != null && item[key].toString().trim().isNotEmpty) {
+          var val = item[key];
+
+          if (val is List && val.isNotEmpty) {
+            return val[0].toString();
+          }
+          else if (val is String) {
+            if (val.startsWith('[') && val.endsWith(']')) {
+              final cleanUrls = val.replaceAll(RegExp(r'[\[\]\"\x27]'), '').split(',');
+              if (cleanUrls.isNotEmpty && cleanUrls[0].trim().startsWith('http')) {
+                return cleanUrls[0].trim();
+              }
+            }
+            else if (val.startsWith('http')) {
+              return val;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint("Image parse error: $e");
+    }
+    return null;
+  }
+
+  // 字段名格式化工具 (把 lostPostID 变成 LOST POST ID)
+  String _formatFieldName(String key) {
+    String formatted = key.replaceAll('_', ' ');
+    formatted = formatted.replaceAllMapped(RegExp(r'(?<=[a-z])([A-Z])'), (Match m) => ' ${m.group(1)}');
+    return formatted.toUpperCase();
+  }
+
+  // 🌟 新增：专门用来处理“机器时间”变成“人类时间”的工具
+  String _formatValue(String key, dynamic val) {
+    String strVal = val.toString();
+
+    // 如果这个字段的名称里包含 date, time 或者 created_at，说明它是时间
+    if (key.toLowerCase().contains('date') || key.toLowerCase().contains('time') || key.toLowerCase() == 'created_at') {
+      try {
+        // 把数据库的 UTC 时间转换成手机本地时间，并排版
+        final parsedDate = DateTime.parse(strVal).toLocal();
+        return DateFormat('MMM dd, yyyy, hh:mm a').format(parsedDate);
+      } catch (e) {
+        // 如果万一解析失败，就原样显示，不至于报错
+        return strVal;
+      }
+    }
+    return strVal;
+  }
+
+  // 接收 postOwnerId 以发送通知
+  Future<void> _handleAction(String id, bool approve, String table, String idField, String? postOwnerId, {String? rejectReason}) async {
     setState(() {
       _processedIds.add(id);
     });
@@ -23,18 +83,26 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
             .from(table)
             .update({'isApproved': true})
             .eq(idField, id)
-            .select(); // trigger stream update
+            .select();
       } else {
         await _supabase.from(table).delete().eq(idField, id);
       }
 
-      // 给用户发系统通知
       if (postOwnerId != null) {
         String friendlyTableName = table.replaceAll('_', ' ').toUpperCase();
+
+        String notificationMessage = approve
+            ? 'Your post in $friendlyTableName has been approved! It is now live.'
+            : 'Your post in $friendlyTableName has been rejected by the admin.';
+
+        if (!approve && rejectReason != null && rejectReason.isNotEmpty) {
+          notificationMessage += '\nReason: $rejectReason';
+        }
+
         await _supabase.from('system_notifications').insert({
           'userID': postOwnerId,
           'title': approve ? 'Post Approved' : 'Post Rejected',
-          'message': 'Your post in $friendlyTableName has been ${approve ? "approved! It is now live." : "rejected by the admin."}'
+          'message': notificationMessage
         });
       }
 
@@ -54,27 +122,82 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
     }
   }
 
-  // 动态展示帖子详情的弹窗（修复了不显示的问题）
-  void _showPostDetails(Map<String, dynamic> item, String table, String idKey, String itemId, String? postOwnerId) {
-    String? coverImage;
+  // 填写拒绝理由的弹窗
+  void _showRejectDialog(String itemId, String table, String idKey, String? postOwnerId) {
+    final TextEditingController reasonController = TextEditingController();
 
-    // 安全地提取图片，防止因为格式不对导致弹窗崩溃
-    try {
-      if (item['mediaURLs'] != null && item['mediaURLs'] is List && (item['mediaURLs'] as List).isNotEmpty) {
-        coverImage = item['mediaURLs'][0];
-      } else {
-        coverImage = item['mediaURL'] ?? item['photoURL'] ?? item['imageURL'] ?? item['attachedFileURL'];
+    showDialog(
+        context: context,
+        builder: (ctx) {
+          return AlertDialog(
+            title: const Text("Reject Post", style: TextStyle(fontWeight: FontWeight.bold)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text("Please provide a reason for rejecting this post. This will be sent to the user.", style: TextStyle(fontSize: 13, color: Colors.grey)),
+                const SizedBox(height: 15),
+                TextField(
+                  controller: reasonController,
+                  decoration: const InputDecoration(
+                    labelText: "Rejection Reason",
+                    border: OutlineInputBorder(),
+                    hintText: "e.g., Inappropriate content, missing info...",
+                  ),
+                  maxLines: 3,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                icon: const Icon(Icons.cancel, size: 16, color: Colors.white),
+                label: const Text("Confirm Reject", style: TextStyle(color: Colors.white)),
+                onPressed: () {
+                  final reason = reasonController.text.trim();
+                  if (reason.isEmpty) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text("Please provide a reason!")));
+                    return;
+                  }
+                  Navigator.pop(ctx);
+                  _handleAction(itemId, false, table, idKey, postOwnerId, rejectReason: reason);
+                },
+              ),
+            ],
+          );
+        }
+    );
+  }
+
+  // 弹窗展示详情
+  Future<void> _showPostDetails(Map<String, dynamic> item, String table, String idKey, String itemId, String? postOwnerId) async {
+    String? coverImage = _extractImage(item);
+
+    String authorName = "Unknown User";
+    String authorEmail = "Unknown Email";
+
+    if (postOwnerId != null) {
+      try {
+        final userRes = await _supabase.from('users').select('userName, userEmail').eq('userID', postOwnerId).maybeSingle();
+        if (userRes != null) {
+          authorName = userRes['userName'] ?? "Unknown User";
+          authorEmail = userRes['userEmail'] ?? "Unknown Email";
+        }
+      } catch (e) {
+        debugPrint("Fetch User Error: $e");
       }
-    } catch (e) {
-      debugPrint("Image parse error: $e");
     }
+
+    if (!mounted) return;
 
     showDialog(
         context: context,
         builder: (context) {
           return AlertDialog(
             title: const Text("Post Details", style: TextStyle(fontWeight: FontWeight.bold)),
-            // 加上明确的宽度约束，防止 Flutter 渲染崩溃导致啥都不显示
             content: SizedBox(
               width: double.maxFinite,
               child: SingleChildScrollView(
@@ -82,7 +205,7 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (coverImage != null && coverImage.toString().isNotEmpty) ...[
+                    if (coverImage != null) ...[
                       ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: Image.network(
@@ -99,12 +222,39 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                       const SizedBox(height: 15),
                     ],
 
-                    // 安全遍历数据，过滤掉空值和链接
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: RichText(
+                        text: TextSpan(
+                          style: const TextStyle(color: Colors.black87, fontSize: 14),
+                          children: [
+                            const TextSpan(text: "AUTHOR NAME: ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+                            TextSpan(text: authorName),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12.0),
+                      child: RichText(
+                        text: TextSpan(
+                          style: const TextStyle(color: Colors.black87, fontSize: 14),
+                          children: [
+                            const TextSpan(text: "AUTHOR EMAIL: ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+                            TextSpan(text: authorEmail),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const Divider(),
+                    const SizedBox(height: 8),
+
+                    // 安全遍历数据
                     ...item.keys.where((key) {
                       final val = item[key];
                       return val != null &&
                           val.toString().trim().isNotEmpty &&
-                          !['mediaURL', 'mediaURLs', 'photoURL', 'imageURL', 'attachedFileURL', 'isApproved'].contains(key);
+                          !['mediaURL', 'mediaURLs', 'photoURL', 'imageURL', 'attachedFileURL', 'isApproved', 'userID', 'likeCount', 'replyCount'].contains(key);
                     }).map((key) {
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 8.0),
@@ -112,8 +262,10 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                           text: TextSpan(
                             style: const TextStyle(color: Colors.black87, fontSize: 14),
                             children: [
-                              TextSpan(text: "${key.toUpperCase()}: ", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
-                              TextSpan(text: item[key].toString()),
+                              TextSpan(text: "${_formatFieldName(key)}: ", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+
+                              // 🌟 修改点：在这里呼叫时间格式化工具处理值
+                              TextSpan(text: _formatValue(key, item[key])),
                             ],
                           ),
                         ),
@@ -134,7 +286,7 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                 label: const Text("Reject", style: TextStyle(color: Colors.white)),
                 onPressed: () {
                   Navigator.pop(context);
-                  _handleAction(itemId, false, table, idKey, postOwnerId);
+                  _showRejectDialog(itemId, table, idKey, postOwnerId);
                 },
               ),
               ElevatedButton.icon(
@@ -179,16 +331,14 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 5, // Adoption, Lost, Found, Education, Forum
+      length: 5,
       child: Scaffold(
         appBar: AppBar(
           title: const Text("Admin Approval", style: TextStyle(fontWeight: FontWeight.bold)),
           backgroundColor: Colors.teal,
           foregroundColor: Colors.white,
           bottom: TabBar(
-            // 关键修改 1：关闭滚动，强行挤在同一页
             isScrollable: false,
-            // 关键修改 2：去除 Padding 并调小字体，确保 5 个字不超标
             labelPadding: EdgeInsets.zero,
             labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
             unselectedLabelStyle: const TextStyle(fontSize: 11),
@@ -240,25 +390,15 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
             final String itemId = item[idKey].toString();
             final String? postOwnerId = item['userID'];
 
-            String? imagePath;
-            try {
-              if (item['mediaURLs'] != null && item['mediaURLs'] is List && (item['mediaURLs'] as List).isNotEmpty) {
-                imagePath = item['mediaURLs'][0];
-              } else {
-                imagePath = item['mediaURL'] ?? item['photoURL'] ?? item['imageURL'] ?? item['attachedFileURL'];
-              }
-            } catch (e) {
-              imagePath = null;
-            }
+            String? imagePath = _extractImage(item);
 
             return Card(
               margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               child: ListTile(
-                // 关键修改 3：绑定点击事件（点击列表里的任何文字/图片即可触发详情弹窗）
                 onTap: () => _showPostDetails(item, table, idKey, itemId, postOwnerId),
                 leading: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: imagePath != null && imagePath.isNotEmpty
+                  child: imagePath != null
                       ? Image.network(
                     imagePath,
                     width: 50,
@@ -282,7 +422,7 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.cancel, color: Colors.red),
-                      onPressed: () => _handleAction(itemId, false, table, idKey, postOwnerId),
+                      onPressed: () => _showRejectDialog(itemId, table, idKey, postOwnerId),
                     ),
                   ],
                 ),
