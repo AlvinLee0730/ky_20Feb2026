@@ -160,16 +160,20 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
       _showError("Please select at least one photo."); return;
     }
 
-    // 自动计算年龄
+    // 🌟 修改：自动计算年龄，如果是 Unknown 则默认为 0，防止报错
     int calculatedAge = 0;
-    if (_dobController.text.isNotEmpty) {
-      DateTime dob = DateTime.parse(_dobController.text);
-      DateTime now = DateTime.now();
-      calculatedAge = now.year - dob.year;
-      if (now.month < dob.month || (now.month == dob.month && now.day < dob.day)) {
-        calculatedAge--;
+    if (_dobController.text.isNotEmpty && _dobController.text != 'Unknown') {
+      try {
+        DateTime dob = DateTime.parse(_dobController.text);
+        DateTime now = DateTime.now();
+        calculatedAge = now.year - dob.year;
+        if (now.month < dob.month || (now.month == dob.month && now.day < dob.day)) {
+          calculatedAge--;
+        }
+        if (calculatedAge < 0) calculatedAge = 0;
+      } catch (e) {
+        debugPrint("DOB Parse error: $e");
       }
-      if (calculatedAge < 0) calculatedAge = 0;
     }
 
     setState(() => _isSaving = true);
@@ -467,6 +471,9 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
       firstImageUrl = post['photoURL'].toString().split(',').first;
     }
 
+    // 🌟 修改：动态判断如果 Date of Birth 是 Unknown，则列表页显示 Unknown age
+    String ageDisplay = post['dateOfBirth'] == 'Unknown' ? 'Unknown age' : '${post['age']}y';
+
     return Card(
       color: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -505,7 +512,7 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
                 children: [
                   Text(post['petName'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 2),
-                  Text("${post['breed']} • ${post['age']}y", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                  Text("${post['breed']} • $ageDisplay", style: const TextStyle(fontSize: 11, color: Colors.grey)),
                   const SizedBox(height: 4),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -554,150 +561,188 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModalState) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(child: Text("Pet Details", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-                const SizedBox(height: 20),
+        builder: (ctx, setModalState) {
+          // 🌟 追踪 DOB 是否为 Unknown
+          bool isDobUnknown = _dobController.text == 'Unknown';
 
-                if (_newImageFiles.isEmpty && (editPost == null || editPost['photoURL'] == null || editPost['photoURL'].toString().isEmpty))
-                  GestureDetector(
-                    onTap: () => _pickImages(setModalState),
-                    child: Container(
-                      height: 120, width: double.infinity,
-                      decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(15)),
-                      child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.add_a_photo, size: 40, color: Colors.teal), Text("Select Photos *")]),
-                    ),
-                  )
-                else
-                  SizedBox(
-                    height: 100,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      children: [
-                        // 展示之前的图片(如果有)
-                        if (editPost != null && editPost['photoURL'] != null && editPost['photoURL'].toString().isNotEmpty && _newImageFiles.isEmpty)
-                          ...editPost['photoURL'].toString().split(',').where((e) => e.isNotEmpty).map((url) => Container(
-                            margin: const EdgeInsets.only(right: 10),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
-                              child: Image.network(url, width: 100, height: 100, fit: BoxFit.cover),
-                            ),
-                          )),
-                        // 展示新选的图片
-                        ..._newImageFiles.map((file) => _buildImageThumbnail(
-                            file: file, onRemove: () => setModalState(() => _newImageFiles.remove(file)))),
-                        GestureDetector(
-                          onTap: () => _pickImages(setModalState),
-                          child: Container(
-                            width: 100, height: 100,
-                            decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(10)),
-                            child: const Icon(Icons.add, size: 40, color: Colors.teal),
-                          ),
-                        )
-                      ],
-                    ),
-                  ),
-                const SizedBox(height: 15),
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Center(child: Text("Pet Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                  const SizedBox(height: 20),
 
-                TextField(controller: _petNameController, decoration: const InputDecoration(labelText: "Pet Name")),
-                TextField(controller: _breedController, decoration: const InputDecoration(labelText: "Breed")),
-
-                TextField(
-                  controller: _dobController,
-                  readOnly: true,
-                  decoration: const InputDecoration(labelText: "Date of Birth", prefixIcon: Icon(Icons.calendar_today)), // 换成标准的日历图标
-                  onTap: () async {
-                    DateTime? picked = await showDatePicker(
-                      context: context,
-                      initialDate: DateTime.now(),
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime.now(),
-                      builder: (context, child) => Theme(
-                        data: Theme.of(context).copyWith(
-                          colorScheme: const ColorScheme.light(primary: Colors.teal, onPrimary: Colors.white, onSurface: Colors.black),
-                        ),
-                        child: child!,
+                  if (_newImageFiles.isEmpty && (editPost == null || editPost['photoURL'] == null || editPost['photoURL'].toString().isEmpty))
+                    GestureDetector(
+                      onTap: () => _pickImages(setModalState),
+                      child: Container(
+                        height: 120, width: double.infinity,
+                        decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(15)),
+                        child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.add_a_photo, size: 40, color: Colors.teal), Text("Select Photos *")]),
                       ),
-                    );
-                    if (picked != null) {
-                      setModalState(() => _dobController.text = DateFormat('yyyy-MM-dd').format(picked));
-                    }
-                  },
-                ),
-
-                TextField(controller: _remarkController, decoration: const InputDecoration(labelText: "Remarks")),
-                CheckboxListTile(
-                    title: const Text("Vaccinated?", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
-                    value: _vaccinated,
-                    activeColor: Colors.teal,
-                    onChanged: (v) => setModalState(() => _vaccinated = v!)
-                ),
-
-                if (_vaccinated) ...[
-                  const Divider(),
-                  TextField(
-                      controller: _vaccineBrandController,
-                      decoration: const InputDecoration(labelText: "Vaccine Brand", prefixIcon: Icon(Icons.medication, color: Colors.teal))
-                  ),
-                  TextField(
-                    controller: _vaccineDateController,
-                    readOnly: true,
-                    decoration: const InputDecoration(labelText: "Last Vaccination Date", prefixIcon: Icon(Icons.calendar_today, color: Colors.teal)),
-                    onTap: () async {
-                      DateTime? picked = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime.now(),
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime.now(),
-                        builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.light(primary: Colors.teal)), child: child!),
-                      );
-                      if (picked != null) setModalState(() => _vaccineDateController.text = DateFormat('yyyy-MM-dd').format(picked));
-                    },
-                  ),
-                  TextField(
-                    controller: _nextDoseController,
-                    readOnly: true,
-                    decoration: const InputDecoration(labelText: "Next Dose Due Date", prefixIcon: Icon(Icons.event_repeat, color: Colors.teal)),
-                    onTap: () async {
-                      DateTime? picked = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime.now().add(const Duration(days: 30)),
-                        firstDate: DateTime.now(),
-                        lastDate: DateTime(2030),
-                        builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.light(primary: Colors.teal)), child: child!),
-                      );
-                      if (picked != null) setModalState(() => _nextDoseController.text = DateFormat('yyyy-MM-dd').format(picked));
-                    },
-                  ),
-                  TextField(
-                    controller: _vaccineRemarkController,
-                    decoration: const InputDecoration(labelText: "Vaccination Remarks (Optional)", prefixIcon: Icon(Icons.note_alt_outlined, color: Colors.teal)),
-                  ),
-                ],
-
-                const SizedBox(height: 25),
-                _isSaving ? const Center(child: CircularProgressIndicator(color: Colors.teal)) : SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => _submitPost(editId: editPost?['adoptionPostID'], existingImageUrl: editPost?['photoURL']),
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.teal,
-                        minimumSize: const Size(double.infinity, 50),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                    )
+                  else
+                    SizedBox(
+                      height: 100,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        children: [
+                          if (editPost != null && editPost['photoURL'] != null && editPost['photoURL'].toString().isNotEmpty && _newImageFiles.isEmpty)
+                            ...editPost['photoURL'].toString().split(',').where((e) => e.isNotEmpty).map((url) => Container(
+                              margin: const EdgeInsets.only(right: 10),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: Image.network(url, width: 100, height: 100, fit: BoxFit.cover),
+                              ),
+                            )),
+                          ..._newImageFiles.map((file) => _buildImageThumbnail(
+                              file: file, onRemove: () => setModalState(() => _newImageFiles.remove(file)))),
+                          GestureDetector(
+                            onTap: () => _pickImages(setModalState),
+                            child: Container(
+                              width: 100, height: 100,
+                              decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(10)),
+                              child: const Icon(Icons.add, size: 40, color: Colors.teal),
+                            ),
+                          )
+                        ],
+                      ),
                     ),
-                    child: const Text("SUBMIT POST", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 15),
+
+                  TextField(controller: _petNameController, decoration: const InputDecoration(labelText: "Pet Name")),
+                  TextField(controller: _breedController, decoration: const InputDecoration(labelText: "Breed")),
+
+                  // 🌟 修改：支持输入 Date of Birth 或者 选择 Unknown
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _dobController,
+                          readOnly: true,
+                          decoration: InputDecoration(
+                            labelText: "Date of Birth",
+                            prefixIcon: const Icon(Icons.calendar_today),
+                            filled: isDobUnknown,
+                            fillColor: isDobUnknown ? Colors.grey.shade200 : null,
+                          ),
+                          onTap: () async {
+                            if (isDobUnknown) return; // 勾选 Unknown 后不可选择日期
+                            DateTime? picked = await showDatePicker(
+                              context: context,
+                              initialDate: DateTime.now(),
+                              firstDate: DateTime(2000),
+                              lastDate: DateTime.now(),
+                              builder: (context, child) => Theme(
+                                data: Theme.of(context).copyWith(
+                                  colorScheme: const ColorScheme.light(primary: Colors.teal, onPrimary: Colors.white, onSurface: Colors.black),
+                                ),
+                                child: child!,
+                              ),
+                            );
+                            if (picked != null) {
+                              setModalState(() => _dobController.text = DateFormat('yyyy-MM-dd').format(picked));
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Checkbox(
+                            value: isDobUnknown,
+                            activeColor: Colors.teal,
+                            onChanged: (val) {
+                              setModalState(() {
+                                isDobUnknown = val ?? false;
+                                if (isDobUnknown) {
+                                  _dobController.text = 'Unknown';
+                                } else {
+                                  _dobController.clear();
+                                }
+                              });
+                            },
+                          ),
+                          const Text("Unknown", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 13)),
+                        ],
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(height: 30),
-              ],
+
+                  TextField(controller: _remarkController, decoration: const InputDecoration(labelText: "Remarks")),
+                  CheckboxListTile(
+                      title: const Text("Vaccinated?", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+                      value: _vaccinated,
+                      activeColor: Colors.teal,
+                      onChanged: (v) => setModalState(() => _vaccinated = v!)
+                  ),
+
+                  if (_vaccinated) ...[
+                    const Divider(),
+                    TextField(
+                        controller: _vaccineBrandController,
+                        decoration: const InputDecoration(labelText: "Vaccine Brand", prefixIcon: Icon(Icons.medication, color: Colors.teal))
+                    ),
+                    TextField(
+                      controller: _vaccineDateController,
+                      readOnly: true,
+                      decoration: const InputDecoration(labelText: "Last Vaccination Date", prefixIcon: Icon(Icons.calendar_today, color: Colors.teal)),
+                      onTap: () async {
+                        DateTime? picked = await showDatePicker(
+                          context: context,
+                          initialDate: DateTime.now(),
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime.now(),
+                          builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.light(primary: Colors.teal)), child: child!),
+                        );
+                        if (picked != null) setModalState(() => _vaccineDateController.text = DateFormat('yyyy-MM-dd').format(picked));
+                      },
+                    ),
+                    TextField(
+                      controller: _nextDoseController,
+                      readOnly: true,
+                      decoration: const InputDecoration(labelText: "Next Dose Due Date", prefixIcon: Icon(Icons.event_repeat, color: Colors.teal)),
+                      onTap: () async {
+                        DateTime? picked = await showDatePicker(
+                          context: context,
+                          initialDate: DateTime.now().add(const Duration(days: 30)),
+                          firstDate: DateTime.now(),
+                          lastDate: DateTime(2030),
+                          builder: (context, child) => Theme(data: Theme.of(context).copyWith(colorScheme: const ColorScheme.light(primary: Colors.teal)), child: child!),
+                        );
+                        if (picked != null) setModalState(() => _nextDoseController.text = DateFormat('yyyy-MM-dd').format(picked));
+                      },
+                    ),
+                    TextField(
+                      controller: _vaccineRemarkController,
+                      decoration: const InputDecoration(labelText: "Vaccination Remarks (Optional)", prefixIcon: Icon(Icons.note_alt_outlined, color: Colors.teal)),
+                    ),
+                  ],
+
+                  const SizedBox(height: 25),
+                  _isSaving ? const Center(child: CircularProgressIndicator(color: Colors.teal)) : SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => _submitPost(editId: editPost?['adoptionPostID'], existingImageUrl: editPost?['photoURL']),
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.teal,
+                          minimumSize: const Size(double.infinity, 50),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                      ),
+                      child: const Text("SUBMIT POST", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(height: 30),
+                ],
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -756,6 +801,9 @@ class _PetDetailPageState extends State<PetDetailPage> {
     if (widget.post['photoURL'] != null && widget.post['photoURL'].toString().isNotEmpty) {
       imageUrls = widget.post['photoURL'].toString().split(',').where((e) => e.isNotEmpty).toList();
     }
+
+    // 🌟 详情页动态判断 Age
+    String ageDisplay = widget.post['dateOfBirth'] == 'Unknown' ? 'Unknown' : "${widget.post['age']} years";
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
@@ -859,7 +907,9 @@ class _PetDetailPageState extends State<PetDetailPage> {
                   _rowItem(Icons.pets, "Breed", widget.post['breed'] ?? "Unknown"),
                   if (widget.post['dateOfBirth'] != null)
                     _rowItem(Icons.calendar_today, "Date of Birth", widget.post['dateOfBirth']),
-                  _rowItem(Icons.hourglass_bottom, "Age", "${widget.post['age']} years"),
+
+                  // 🌟 替换掉原本直接写死的 age
+                  _rowItem(Icons.hourglass_bottom, "Age", ageDisplay),
                   _rowItem(Icons.health_and_safety, "Vaccinated", widget.post['vaccinated'] == true ? "Yes" : "No"),
 
                   if (widget.post['vaccinated'] == true) ...[

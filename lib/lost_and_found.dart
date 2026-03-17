@@ -22,7 +22,7 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
   int _currentPage = 0;
   final int _itemsPerPage = 6;
 
-  // --- 替换 Stream 为手动控制的 State 以实现即时刷新 ---
+  // --- 手动控制的 State 以实现即时刷新 ---
   List<Map<String, dynamic>> _posts = [];
   bool _isLoading = true;
 
@@ -207,6 +207,7 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
         'uploadDate': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'remark': _remarkController.text.trim(),
         'isApproved': false,
+        'status': 'Active', // 默认状态为 Active
       });
 
       if (mounted) {
@@ -232,6 +233,99 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
     _eventDate = null;
     _selectedGender = 'Male';
     _contactType = 'Phone';
+  }
+
+  void _showAddForm() {
+    _clearForm();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_selectedTab == 'Lost' ? "Report Lost Pet" : "Report Found Pet", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 15),
+                // Location
+                TextField(controller: _locationController, decoration: const InputDecoration(labelText: "Location", border: OutlineInputBorder())),
+                const SizedBox(height: 15),
+                // Date
+                ListTile(
+                  shape: RoundedRectangleBorder(side: BorderSide(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
+                  title: Text(_eventDate == null ? "Select Date" : DateFormat('yyyy-MM-dd').format(_eventDate!)),
+                  trailing: const Icon(Icons.calendar_today),
+                  onTap: () async {
+                    final picked = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now());
+                    if (picked != null) setModalState(() => _eventDate = picked);
+                  },
+                ),
+                const SizedBox(height: 15),
+                // Gender
+                DropdownButtonFormField<String>(
+                  value: _selectedGender,
+                  items: ['Male', 'Female'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                  onChanged: (v) => setModalState(() => _selectedGender = v!),
+                  decoration: const InputDecoration(labelText: "Gender", border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 15),
+                // Contact
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 1,
+                      child: DropdownButtonFormField<String>(
+                        value: _contactType,
+                        items: ['Phone', 'Email', 'Facebook', 'Instagram'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                        onChanged: (v) => setModalState(() => _contactType = v!),
+                        decoration: const InputDecoration(border: OutlineInputBorder()),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 2,
+                      child: TextField(controller: _contactController, decoration: const InputDecoration(labelText: "Contact Info", border: OutlineInputBorder())),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 15),
+                // Remark
+                TextField(controller: _remarkController, decoration: const InputDecoration(labelText: "Remark (Max 100 chars)", border: OutlineInputBorder()), maxLength: 100),
+                const SizedBox(height: 15),
+                // Photos
+                ElevatedButton.icon(
+                  onPressed: () => _pickImages(setModalState),
+                  icon: const Icon(Icons.photo),
+                  label: const Text("Select Photos"),
+                ),
+                const SizedBox(height: 10),
+                if (_newImageFiles.isNotEmpty)
+                  SizedBox(
+                    height: 100,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _newImageFiles.length,
+                      itemBuilder: (ctx, i) => _buildImageThumbnail(file: _newImageFiles[i], onRemove: () => setModalState(() => _newImageFiles.removeAt(i))),
+                    ),
+                  ),
+                const SizedBox(height: 25),
+                _isSaving ? const Center(child: CircularProgressIndicator()) : ElevatedButton(
+                  onPressed: _submitPost,
+                  style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50), backgroundColor: Colors.teal),
+                  child: const Text("SUBMIT", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(height: 30),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _showFilterModal() {
@@ -268,7 +362,6 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
                 ],
               ),
               const SizedBox(height: 15),
-
               TextField(
                 controller: tempLocController,
                 decoration: InputDecoration(
@@ -278,7 +371,6 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
                 ),
               ),
               const SizedBox(height: 15),
-
               DropdownButtonFormField<String>(
                 value: tempGender,
                 decoration: InputDecoration(
@@ -290,7 +382,6 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
                 onChanged: (v) => setModalState(() => tempGender = v!),
               ),
               const SizedBox(height: 15),
-
               ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12),
                 shape: RoundedRectangleBorder(
@@ -319,7 +410,6 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
                 },
               ),
               const SizedBox(height: 25),
-
               ElevatedButton(
                 onPressed: () {
                   setState(() {
@@ -393,10 +483,7 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
                       borderRadius: BorderRadius.circular(24),
                       border: hasActiveFilter ? Border.all(color: Colors.orange, width: 2) : null,
                     ),
-                    child: Icon(
-                        Icons.filter_list,
-                        color: hasActiveFilter ? Colors.orange : Colors.teal
-                    ),
+                    child: Icon(Icons.filter_list, color: hasActiveFilter ? Colors.orange : Colors.teal),
                   ),
                 )
               ],
@@ -422,13 +509,11 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
     );
   }
 
-  // --- 构建带有下拉刷新与分页的列表 ---
   Widget _buildFilteredList(String? currentUid, String dateKey) {
     var data = _posts.where((post) {
       final bool isVisible = (post['isApproved'] == true) || (post['userID'] == currentUid);
       final bool matchesLocation = post['location'].toString().toLowerCase().contains(_searchQuery);
       final bool matchesGender = _filterGender == 'All' || post['gender'] == _filterGender;
-
       bool matchesDate = true;
       if (_filterDate != null) {
         final String? postDateStr = post[dateKey];
@@ -438,7 +523,6 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
           matchesDate = false;
         }
       }
-
       return isVisible && matchesLocation && matchesGender && matchesDate;
     }).toList();
 
@@ -494,8 +578,11 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
           Expanded(
             child: GestureDetector(
               onTap: () {
-                setState(() { _selectedTab = 'Lost'; _currentPage = 0; });
-                _fetchPosts(); // 切换标签时抓取数据
+                setState(() {
+                  _selectedTab = 'Lost';
+                  _currentPage = 0;
+                });
+                _fetchPosts();
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 12),
@@ -519,8 +606,11 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
           Expanded(
             child: GestureDetector(
               onTap: () {
-                setState(() { _selectedTab = 'Found'; _currentPage = 0; });
-                _fetchPosts(); // 切换标签时抓取数据
+                setState(() {
+                  _selectedTab = 'Found';
+                  _currentPage = 0;
+                });
+                _fetchPosts();
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 12),
@@ -548,6 +638,7 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
 
   Widget _buildPetCard(Map<String, dynamic> post) {
     final bool isPending = post['isApproved'] == false;
+    final bool isResolved = post['status'] == 'Resolved';
 
     String? firstImageUrl;
     if (post['photoURL'] != null && post['photoURL'].toString().isNotEmpty) {
@@ -560,198 +651,90 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
       clipBehavior: Clip.antiAlias,
       elevation: 2,
       child: InkWell(
-        // --- 修改：从详情页返回后，执行 .then 自动刷新最新数据！---
-        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (ctx) => PostDetailPage(post: post, type: _selectedTab))).then((_) => _fetchPosts()),
+        onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (ctx) => PostDetailPage(post: post, type: _selectedTab))
+        ).then((_) => _fetchPosts()), // 从详情页返回后自动刷新
         child: Stack(
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: firstImageUrl != null
-                      ? Image.network(firstImageUrl, fit: BoxFit.cover, width: double.infinity)
-                      : Container(color: Colors.grey[200], child: const Icon(Icons.image_not_supported)),
+            children: [
+              // Image
+              Positioned.fill(
+                child: firstImageUrl != null
+                    ? Image.network(firstImageUrl, fit: BoxFit.cover)
+                    : Container(color: Colors.grey[200], child: const Icon(Icons.pets, size: 50, color: Colors.grey)),
+              ),
+
+              // Status Tags (Resolved 或 Pending)
+              if (isResolved)
+                Positioned(
+                  top: 8, right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(12)),
+                    child: const Text("RESOLVED", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ),
+                )
+              else if (isPending)
+                Positioned(
+                  top: 8, right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(12)),
+                    child: const Text("PENDING", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.all(10.0),
+
+              // Info gradient bar
+              Positioned(
+                bottom: 0, left: 0, right: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(colors: [Colors.black87, Colors.transparent], begin: Alignment.bottomCenter, end: Alignment.topCenter),
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(post['location'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis),
-                      const SizedBox(height: 4),
-                      Text(post['gender'] ?? 'Unknown', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                      Text(post['location'] ?? 'Unknown', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text(post[_selectedTab == 'Lost' ? 'dateLost' : 'dateFound'] ?? '', style: const TextStyle(color: Colors.white70, fontSize: 12)),
                     ],
                   ),
                 ),
-              ],
-            ),
-            if (isPending)
-              Positioned(
-                top: 10, left: 10,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(color: Colors.orange.withOpacity(0.9), borderRadius: BorderRadius.circular(20)),
-                  child: const Text("Pending", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                ),
               ),
-          ],
+            ]
         ),
       ),
     );
   }
 
-  Widget _buildPagination(int total) {
-    return Container(
-      padding: const EdgeInsets.only(top: 10, bottom: 25),
+  Widget _buildPagination(int totalPages) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          IconButton(icon: const Icon(Icons.arrow_back_ios_new, size: 18), onPressed: _currentPage > 0 ? () => setState(() => _currentPage--) : null),
-          Text("Page ${_currentPage + 1} of $total", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
-          IconButton(icon: const Icon(Icons.arrow_forward_ios, size: 18), onPressed: _currentPage < total - 1 ? () => setState(() => _currentPage++) : null),
-        ],
-      ),
-    );
-  }
-
-  void _showAddForm() {
-    _newImageFiles = [];
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModalState) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(child: Text("Report ${_selectedTab} Pet", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-                const SizedBox(height: 20),
-
-                if (_newImageFiles.isEmpty)
-                  GestureDetector(
-                    onTap: () => _pickImages(setModalState),
-                    child: Container(
-                      height: 120, width: double.infinity,
-                      decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(15)),
-                      child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.add_a_photo, size: 40, color: Colors.teal), Text("Select Photos *")]),
-                    ),
-                  )
-                else
-                  SizedBox(
-                    height: 100,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      children: [
-                        ..._newImageFiles.map((file) => _buildImageThumbnail(
-                            file: file, onRemove: () => setModalState(() => _newImageFiles.remove(file)))),
-                        GestureDetector(
-                          onTap: () => _pickImages(setModalState),
-                          child: Container(
-                            width: 100, height: 100,
-                            decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(10)),
-                            child: const Icon(Icons.add, size: 40, color: Colors.teal),
-                          ),
-                        )
-                      ],
-                    ),
-                  ),
-
-                const SizedBox(height: 15),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: _selectedGender,
-                        decoration: const InputDecoration(labelText: "Gender"),
-                        items: ['Male', 'Female'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                        onChanged: (v) => setModalState(() => _selectedGender = v!),
-                      ),
-                    ),
-                    const SizedBox(width: 15),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: _contactType,
-                        decoration: const InputDecoration(labelText: "Contact Type"),
-                        items: ['Phone', 'Social Media'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                        onChanged: (v) => setModalState(() => _contactType = v!),
-                      ),
-                    ),
-                  ],
-                ),
-                TextField(controller: _locationController, decoration: const InputDecoration(labelText: "Location *", hintText: "e.g. TARUMT Area")),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.calendar_today, color: Colors.teal),
-                  title: Text(_eventDate == null
-                      ? "Select Date ${_selectedTab} *"
-                      : "Date ${_selectedTab}: ${DateFormat('yyyy-MM-dd').format(_eventDate!)}"),
-                  onTap: () async {
-                    final DateTime? picked = await showDatePicker(
-                      context: context,
-                      initialDate: DateTime.now(),
-                      firstDate: DateTime(2024),
-                      lastDate: DateTime.now(),
-                      builder: (context, child) {
-                        return Theme(
-                          data: Theme.of(context).copyWith(
-                            colorScheme: const ColorScheme.light(primary: Colors.teal, onPrimary: Colors.white, onSurface: Colors.black),
-                          ),
-                          child: child!,
-                        );
-                      },
-                    );
-                    if (picked != null) setModalState(() => _eventDate = picked);
-                  },
-                ),
-                TextField(
-                    controller: _contactController,
-                    decoration: InputDecoration(
-                        labelText: "Enter $_contactType *",
-                        hintText: _contactType == 'Phone' ? "01X-XXXXXXX" : "@username"
-                    )
-                ),
-                TextField(
-                  controller: _remarkController,
-                  maxLength: 100,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                      labelText: "Remark (Max 100 characters)",
-                      alignLabelWithHint: true,
-                      hintText: "Anything else to add?"
-                  ),
-                ),
-                const SizedBox(height: 25),
-                _isSaving
-                    ? const Center(child: CircularProgressIndicator())
-                    : ElevatedButton(
-                  onPressed: _submitPost,
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal,
-                      minimumSize: const Size(double.infinity, 50),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
-                  ),
-                  child: const Text("SUBMIT FOR APPROVAL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                ),
-                const SizedBox(height: 30),
-              ],
-            ),
+          IconButton(
+            icon: const Icon(Icons.arrow_back_ios, size: 16),
+            onPressed: _currentPage > 0 ? () => setState(() => _currentPage--) : null,
           ),
-        ),
+          Text("Page ${_currentPage + 1} of $totalPages", style: const TextStyle(fontWeight: FontWeight.bold)),
+          IconButton(
+            icon: const Icon(Icons.arrow_forward_ios, size: 16),
+            onPressed: _currentPage < totalPages - 1 ? () => setState(() => _currentPage++) : null,
+          ),
+        ],
       ),
     );
   }
 }
 
-// --- 详情与编辑页面 ---
+// ==========================================
+// 🌟 独立详情页面 (PostDetailPage)
+// ==========================================
 class PostDetailPage extends StatefulWidget {
   final Map<String, dynamic> post;
   final String type;
+
   const PostDetailPage({super.key, required this.post, required this.type});
 
   @override
@@ -760,46 +743,39 @@ class PostDetailPage extends StatefulWidget {
 
 class _PostDetailPageState extends State<PostDetailPage> {
   final _supabase = Supabase.instance.client;
-  bool _isAdmin = false;
+  late Map<String, dynamic> _currentPost;
+  bool _isLoading = false;
+
+  // 🌟 新增：获取发帖人信息
   String _authorName = "Unknown User";
   String? _authorPhoto;
-  int _currentImageIndex = 0;
-
-  // --- 核心：将静态的 widget.post 转为可变的状态，以便在不退出的情况下刷新UI ---
-  late Map<String, dynamic> _currentPost;
 
   @override
   void initState() {
     super.initState();
-    _currentPost = Map<String, dynamic>.from(widget.post); // 拷贝数据到本地 State
-    _loadData();
+    _currentPost = Map<String, dynamic>.from(widget.post);
+    _loadAuthorData(); // 加载发帖人信息
   }
 
-  Future<void> _loadData() async {
-    final user = _supabase.auth.currentUser;
-    if (user == null) return;
+  // 🌟 新增：从 users 表抓取头像和名字
+  Future<void> _loadAuthorData() async {
     try {
-      final roleRes = await _supabase.from('users').select('role').eq('userID', user.id).maybeSingle();
-      if (mounted && roleRes != null) setState(() => _isAdmin = roleRes['role'] == 'Admin');
-
-      final userRes = await _supabase.from('users').select('userName, userPhoto').eq('userID', _currentPost['userID']).maybeSingle();
+      final userRes = await _supabase.from('users').select('userName, userPhoto').eq('userID', widget.post['userID']).maybeSingle();
       if (mounted && userRes != null) {
         setState(() {
-          _authorName = userRes['userName'] ?? _currentPost['userID'];
+          _authorName = userRes['userName'] ?? widget.post['userID'];
           _authorPhoto = userRes['userPhoto'];
         });
       }
     } catch (e) {
-      debugPrint("Load error: $e");
+      debugPrint("Load author error: $e");
     }
   }
 
+  // 🌟 新增：跳转去私聊
   void _goToChat(String? targetId, String targetName) {
     final myId = _supabase.auth.currentUser?.id;
-    if (targetId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("User information is missing.")));
-      return;
-    }
+    if (targetId == null) return;
     if (targetId == myId) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("You cannot start a chat with yourself.")));
       return;
@@ -807,289 +783,372 @@ class _PostDetailPageState extends State<PostDetailPage> {
     Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: targetId, title: targetName)));
   }
 
-  void _showError(String msg) {
-    showDialog(
+  // 标记帖子为已解决
+  Future<void> _markAsResolved() async {
+    bool confirm = await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("Mark as Resolved?", style: TextStyle(fontWeight: FontWeight.bold)),
+          content: const Text("Are you sure you want to mark this post as resolved? This means the pet has successfully found its owner! \n\n(This action cannot be undone)"),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Confirm", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        )
+    ) ?? false;
+
+    if (!confirm) return;
+
+    final isLost = widget.type == 'Lost';
+    final table = isLost ? 'lost_post' : 'found_post';
+    final idKey = isLost ? 'lostPostID' : 'foundPostID';
+
+    try {
+      await _supabase.from(table).update({'status': 'Resolved'}).eq(idKey, _currentPost[idKey]);
+
+      if (mounted) {
+        setState(() {
+          _currentPost['status'] = 'Resolved';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("🎉 Wonderful! Post marked as resolved!"), backgroundColor: Colors.green));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+    }
+  }
+
+  // 删除帖子
+  Future<void> _deletePost() async {
+    bool confirm = await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("Delete Post?"),
+          content: const Text("This action cannot be undone."),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () => Navigator.pop(ctx, true), child: const Text("Delete", style: TextStyle(color: Colors.white))),
+          ],
+        )
+    ) ?? false;
+
+    if (!confirm) return;
+
+    final isLost = widget.type == 'Lost';
+    final table = isLost ? 'lost_post' : 'found_post';
+    final idKey = isLost ? 'lostPostID' : 'foundPostID';
+
+    setState(() => _isLoading = true);
+    try {
+      await _supabase.from(table).delete().eq(idKey, _currentPost[idKey]);
+      if (mounted) {
+        Navigator.pop(context, true); // 成功后返回上一页
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  // 编辑帖子
+  void _editPost() {
+    final locCtrl = TextEditingController(text: _currentPost['location']);
+    final remCtrl = TextEditingController(text: _currentPost['remark']);
+    String currentGen = _currentPost['gender'] ?? 'Male';
+
+    // 解析联系方式
+    String rawContact = _currentPost['contactInfo'] ?? '';
+    String cType = 'Phone';
+    String cInfo = rawContact;
+    if (rawContact.contains(': ')) {
+      final parts = rawContact.split(': ');
+      cType = parts[0];
+      cInfo = parts[1];
+    }
+    final conCtrl = TextEditingController(text: cInfo);
+
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Validation Failed", style: TextStyle(color: Colors.redAccent)),
-        content: Text(msg),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK", style: TextStyle(color: Colors.teal)))],
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text("Edit Post", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 15),
+                TextField(controller: locCtrl, decoration: const InputDecoration(labelText: "Location", border: OutlineInputBorder())),
+                const SizedBox(height: 15),
+                DropdownButtonFormField<String>(
+                  value: currentGen,
+                  items: ['Male', 'Female'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                  onChanged: (v) => setModalState(() => currentGen = v!),
+                  decoration: const InputDecoration(labelText: "Gender", border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 15),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 1,
+                      child: DropdownButtonFormField<String>(
+                        value: ['Phone', 'Email', 'Facebook', 'Instagram'].contains(cType) ? cType : 'Phone',
+                        items: ['Phone', 'Email', 'Facebook', 'Instagram'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                        onChanged: (v) => setModalState(() => cType = v!),
+                        decoration: const InputDecoration(border: OutlineInputBorder()),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 2,
+                      child: TextField(controller: conCtrl, decoration: const InputDecoration(labelText: "Contact Info", border: OutlineInputBorder())),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 15),
+                TextField(controller: remCtrl, decoration: const InputDecoration(labelText: "Remark", border: OutlineInputBorder())),
+                const SizedBox(height: 25),
+                ElevatedButton(
+                  onPressed: () async {
+                    final isLost = widget.type == 'Lost';
+                    final table = isLost ? 'lost_post' : 'found_post';
+                    final idKey = isLost ? 'lostPostID' : 'foundPostID';
+                    final newContact = "$cType: ${conCtrl.text.trim()}";
+
+                    try {
+                      await _supabase.from(table).update({
+                        'location': locCtrl.text.trim(),
+                        'remark': remCtrl.text.trim(),
+                        'contactInfo': newContact,
+                        'gender': currentGen,
+                      }).eq(idKey, _currentPost[idKey]);
+
+                      if (mounted) {
+                        Navigator.pop(ctx);
+                        setState(() {
+                          _currentPost['location'] = locCtrl.text.trim();
+                          _currentPost['remark'] = remCtrl.text.trim();
+                          _currentPost['contactInfo'] = newContact;
+                          _currentPost['gender'] = currentGen;
+                        });
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Updated!"), backgroundColor: Colors.green));
+                      }
+                    } catch (e) {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50), backgroundColor: Colors.teal),
+                  child: const Text("SAVE", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(height: 30),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // 所有的 widget.post 都改用 _currentPost
-    final bool isOwner = _supabase.auth.currentUser?.id == _currentPost['userID'];
-    final bool canModify = isOwner || _isAdmin;
-    final String dateKey = widget.type == 'Lost' ? 'dateLost' : 'dateFound';
-
-    List<String> imageUrls = [];
-    if (_currentPost['photoURL'] != null && _currentPost['photoURL'].toString().isNotEmpty) {
-      imageUrls = _currentPost['photoURL'].toString().split(',').where((e) => e.isNotEmpty).toList();
+    // 提取大图链接
+    String? imageUrl;
+    if (_currentPost['mediaURLs'] != null && (_currentPost['mediaURLs'] as List).isNotEmpty) {
+      imageUrl = _currentPost['mediaURLs'][0];
+    } else if (_currentPost['photoURL'] != null && _currentPost['photoURL'].toString().isNotEmpty) {
+      imageUrl = _currentPost['photoURL'].toString().split(',').first;
     }
+
+    final isMe = _currentPost['userID'] == _supabase.auth.currentUser?.id;
+    final isLost = widget.type == 'Lost';
+    final String status = _currentPost['status'] ?? 'Active';
 
     return Scaffold(
-      backgroundColor: Colors.grey[50],
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(_currentPost['location']),
+        title: const Text("Post Details", style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
-        elevation: 0,
-        actions: [
-          if (canModify) ...[
-            IconButton(icon: const Icon(Icons.edit, color: Colors.white), onPressed: () => _showEditForm(context)),
-            IconButton(icon: const Icon(Icons.delete, color: Colors.redAccent), onPressed: _confirmDelete),
-          ]
-        ],
       ),
-      body: SingleChildScrollView(
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (imageUrls.isNotEmpty)
-              Stack(
-                alignment: Alignment.bottomCenter,
-                children: [
-                  SizedBox(
-                    height: 300,
-                    child: PageView.builder(
-                      itemCount: imageUrls.length,
-                      onPageChanged: (index) {
-                        setState(() { _currentImageIndex = index; });
-                      },
-                      itemBuilder: (context, index) {
-                        return Image.network(imageUrls[index], fit: BoxFit.cover, width: double.infinity);
-                      },
-                    ),
-                  ),
-                  if (imageUrls.length > 1)
-                    Positioned(
-                      bottom: 10,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: List.generate(imageUrls.length, (index) {
-                          return Container(
-                            margin: const EdgeInsets.symmetric(horizontal: 3),
-                            width: _currentImageIndex == index ? 10 : 6,
-                            height: _currentImageIndex == index ? 10 : 6,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: _currentImageIndex == index ? Colors.teal : Colors.white70,
-                            ),
-                          );
-                        }),
-                      ),
-                    )
-                ],
+            if (imageUrl != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(15),
+                child: Image.network(imageUrl, width: double.infinity, height: 250, fit: BoxFit.cover),
               ),
+            const SizedBox(height: 20),
 
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(_currentPost['location'], style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
-
-                  InkWell(
-                    onTap: () {
-                      final targetId = _currentPost['userID'];
-                      _goToChat(targetId, _authorName);
-                    },
-                    borderRadius: BorderRadius.circular(10),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          CircleAvatar(
-                            radius: 14,
-                            backgroundColor: Colors.grey.shade200,
-                            backgroundImage: _authorPhoto != null ? NetworkImage(_authorPhoto!) : null,
-                            child: _authorPhoto == null ? const Icon(Icons.person, size: 18, color: Colors.grey) : null,
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              "Uploaded by $_authorName",
-                              style: const TextStyle(
-                                color: Colors.teal,
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          const Icon(Icons.chat, size: 14, color: Colors.teal),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 15),
-
-                  _rowItem(Icons.pets, "Gender", _currentPost['gender'] ?? 'Unknown'),
-                  _rowItem(Icons.calendar_today, "Date ${widget.type}", _currentPost[dateKey] ?? "N/A"),
-                  _rowItem(Icons.contact_phone, "Contact Info", _currentPost['contactInfo'] ?? 'N/A'),
-                  const Divider(height: 30),
-                  const Text("Remarks:", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 16)),
-                  const SizedBox(height: 8),
-                  Text(_currentPost['remark'] ?? "None", style: const TextStyle(fontSize: 15)),
-                  const SizedBox(height: 30),
-                ],
+            // Status Badge (Resolved/Lost/Found)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: status == 'Resolved' ? Colors.green : (isLost ? Colors.red : Colors.teal),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                status == 'Resolved' ? "RESOLVED" : (isLost ? "LOST PET" : "FOUND PET"),
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
+            const SizedBox(height: 15),
 
-  Widget _rowItem(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(children: [
-        Icon(icon, size: 20, color: Colors.teal),
-        const SizedBox(width: 12),
-        Text("$label: ", style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
-        Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold))),
-      ]),
-    );
-  }
+            Text("Location: ${_currentPost['location'] ?? 'Unknown'}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
 
-  void _confirmDelete() {
-    showDialog(context: context, builder: (ctx) => AlertDialog(
-      title: const Text("Delete Post?"),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel", style: TextStyle(color: Colors.teal))),
-        TextButton(onPressed: () async {
-          final table = widget.type == 'Lost' ? 'lost_post' : 'found_post';
-          final idKey = widget.type == 'Lost' ? 'lostPostID' : 'foundPostID';
-          await _supabase.from(table).delete().eq(idKey, _currentPost[idKey]);
-          if (mounted) {
-            Navigator.pop(ctx); // 关闭确认弹窗
-            Navigator.pop(context); // 关闭详情页，回到列表后会自动触发刷新
-          }
-        }, child: const Text("Delete", style: TextStyle(color: Colors.red))),
-      ],
-    ));
-  }
-
-  void _showEditForm(BuildContext context) {
-    final loc = TextEditingController(text: _currentPost['location']);
-    final rem = TextEditingController(text: _currentPost['remark']);
-
-    String initialType = 'Phone';
-    String initialVal = _currentPost['contactInfo'] ?? "";
-    if (initialVal.contains(': ')) {
-      initialType = initialVal.split(': ')[0];
-      initialVal = initialVal.split(': ')[1];
-    }
-    final con = TextEditingController(text: initialVal);
-
-    String currentGen = _currentPost['gender'] ?? 'Male';
-    String currentType = initialType;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setMState) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text("Edit Report Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 15),
-                Row(
+            // ==========================================
+            // 🌟 新增：像 Pet Adoption 一样的 Clickable 聊天头像栏
+            // ==========================================
+            InkWell(
+              onTap: () {
+                final targetId = _currentPost['userID'];
+                _goToChat(targetId, _authorName);
+              },
+              borderRadius: BorderRadius.circular(10),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: currentGen,
-                        decoration: const InputDecoration(labelText: "Gender"),
-                        items: ['Male', 'Female'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                        onChanged: (v) => setMState(() => currentGen = v!),
+                    CircleAvatar(
+                      radius: 14,
+                      backgroundColor: Colors.grey.shade200,
+                      backgroundImage: _authorPhoto != null ? NetworkImage(_authorPhoto!) : null,
+                      child: _authorPhoto == null ? const Icon(Icons.person, size: 18, color: Colors.grey) : null,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        "Posted by $_authorName",
+                        style: const TextStyle(
+                          color: Colors.teal,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 15),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: currentType,
-                        decoration: const InputDecoration(labelText: "Contact Type"),
-                        items: ['Phone', 'Social Media'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                        onChanged: (v) => setMState(() => currentType = v!),
-                      ),
-                    ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.chat, size: 14, color: Colors.teal),
                   ],
                 ),
-                TextField(controller: loc, decoration: const InputDecoration(labelText: "Location")),
-                TextField(controller: con, decoration: InputDecoration(labelText: "Enter $currentType")),
-                TextField(
-                  controller: rem,
-                  maxLength: 100,
-                  maxLines: 2,
-                  decoration: const InputDecoration(labelText: "Remark (Max 100 chars)", alignLabelWithHint: true),
-                ),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: () async {
-                    if (currentType == 'Phone') {
-                      final val = con.text.trim();
-                      final reg011 = RegExp(r'^011-\d{8}$');
-                      final regNormal = RegExp(r'^01[0,2-9]-\d{7}$');
-                      if (val.startsWith('011')) {
-                        if (!reg011.hasMatch(val)) {
-                          _showError("Format for 011 must be 011-XXXXXXXX");
-                          return;
-                        }
-                      } else if (!regNormal.hasMatch(val)) {
-                        _showError("Format must be 01X-XXXXXXX");
-                        return;
-                      }
-                    }
+              ),
+            ),
+            const SizedBox(height: 10),
+            // ==========================================
 
-                    if (rem.text.length > 100) {
-                      _showError("Remark is too long (max 100).");
-                      return;
-                    }
-
-                    final table = widget.type == 'Lost' ? 'lost_post' : 'found_post';
-                    final idKey = widget.type == 'Lost' ? 'lostPostID' : 'foundPostID';
-
-                    await _supabase.from(table).update({
-                      'location': loc.text.trim(),
-                      'remark': rem.text.trim(),
-                      'contactInfo': "$currentType: ${con.text.trim()}",
-                      'gender': currentGen,
-                    }).eq(idKey, _currentPost[idKey]);
-
-                    if (mounted) {
-                      Navigator.pop(ctx); // --- 修改：只关闭底部表单弹窗，不退出详情页！---
-
-                      // --- 同步更新本地UI状态，让页面立刻展现修改结果 ---
-                      setState(() {
-                        _currentPost['location'] = loc.text.trim();
-                        _currentPost['remark'] = rem.text.trim();
-                        _currentPost['contactInfo'] = "$currentType: ${con.text.trim()}";
-                        _currentPost['gender'] = currentGen;
-                      });
-
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Post updated successfully!"), backgroundColor: Colors.green));
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal,
-                      minimumSize: const Size(double.infinity, 50),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
-                  ),
-                  child: const Text("SAVE CHANGES", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                ),
-                const SizedBox(height: 30),
+            Row(
+              children: [
+                const Icon(Icons.calendar_today, size: 16, color: Colors.grey),
+                const SizedBox(width: 8),
+                Text("Date: ${_currentPost[isLost ? 'dateLost' : 'dateFound'] ?? 'Unknown'}", style: const TextStyle(color: Colors.grey, fontSize: 14)),
               ],
             ),
-          ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(_currentPost['gender'] == 'Male' ? Icons.male : Icons.female, size: 16, color: Colors.grey),
+                const SizedBox(width: 8),
+                Text("Gender: ${_currentPost['gender'] ?? 'Unknown'}", style: const TextStyle(color: Colors.grey, fontSize: 14)),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            const Text("Description:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 8),
+            Text(_currentPost['remark'] ?? "No description provided.", style: const TextStyle(fontSize: 15, height: 1.4)),
+            const SizedBox(height: 20),
+
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(color: Colors.blueGrey[50], borderRadius: BorderRadius.circular(12)),
+              child: Row(
+                children: [
+                  const Icon(Icons.contact_phone, color: Colors.teal),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("Contact Info", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
+                        Text(_currentPost['contactInfo'] ?? "Not provided", style: TextStyle(color: Colors.grey[700])),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 30),
+
+            // ==========================================
+            // 🌟 权限控制按钮区域 (仅自己可见)
+            // ==========================================
+            if (isMe) ...[
+              const Divider(),
+              const SizedBox(height: 10),
+
+              // 未解决的帖子，显示绿色大按钮
+              if (status != 'Resolved') ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _markAsResolved,
+                    icon: const Icon(Icons.verified, color: Colors.white),
+                    label: const Text("MARK AS RESOLVED", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 2,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _deletePost,
+                      icon: const Icon(Icons.delete, color: Colors.red),
+                      label: const Text("Delete", style: TextStyle(color: Colors.red)),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        side: const BorderSide(color: Colors.red),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _editPost,
+                      icon: const Icon(Icons.edit, color: Colors.white),
+                      label: const Text("Edit", style: TextStyle(color: Colors.white)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.teal,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            // ❌ 已经移除了之前的 else 里的 Contact Owner 大按钮
+            const SizedBox(height: 30),
+          ],
         ),
       ),
     );

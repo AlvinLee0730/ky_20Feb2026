@@ -5,7 +5,7 @@ import 'package:intl/intl.dart';
 import 'dart:math';
 
 // ==========================================
-// 1. 聊天列表主页 (加入红点展示)
+// 1. 聊天列表主页 (加入红点展示及全新搜索功能)
 // ==========================================
 class ChatModuleList extends StatefulWidget {
   const ChatModuleList({super.key});
@@ -82,50 +82,239 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
     } catch (e) {}
   }
 
-  void _searchUserByEmail() async {
-    final emailController = TextEditingController();
-    String? errorMessage;
-    bool isLoading = false;
+  // =========================================================
+  // 发起群聊核心逻辑
+  // =========================================================
+  Future<void> _submitGroupChat(List<String> userIds, String groupName, BuildContext context) async {
+    if (groupName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please enter a group name")));
+      return;
+    }
+    try {
+      final String groupID = "CG${Random().nextInt(99999999)}";
+      final String myID = _supabase.auth.currentUser!.id;
 
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-          builder: (context, setStateDialog) {
-            return AlertDialog(
-              title: const Text("Search User"),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(controller: emailController, decoration: const InputDecoration(hintText: "example@gmail.com")),
-                  if (errorMessage != null) ...[
-                    const SizedBox(height: 8),
-                    Text(errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
-                  ]
-                ],
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
-                  onPressed: isLoading ? null : () async {
-                    setStateDialog(() { isLoading = true; errorMessage = null; });
-                    final res = await _supabase.from('users').select().eq('userEmail', emailController.text.trim()).maybeSingle();
-                    setStateDialog(() => isLoading = false);
+      // 建立群组
+      await _supabase.from('ChatGroup').insert({'chatGroupID': groupID, 'groupName': groupName, 'isPublic': false});
+      // 自己作为 Owner
+      await _supabase.from('GroupMembers').insert({'chatGroupID': groupID, 'userID': myID, 'role': 'Owner'});
+      // 批量加入其他成员
+      final membersData = userIds.map((id) => {'chatGroupID': groupID, 'userID': id, 'role': 'Member'}).toList();
+      await _supabase.from('GroupMembers').insert(membersData);
 
-                    if (res != null) {
-                      if (!mounted) return;
-                      Navigator.pop(context);
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: res['userID'], title: res['userName'])));
-                    } else {
-                      setStateDialog(() => errorMessage = "User not found in database!");
+      Navigator.pop(context);
+      Navigator.push(context, MaterialPageRoute(builder: (_) => GroupChatPage(groupID: groupID, groupName: groupName)));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to create group: $e")));
+    }
+  }
+
+  // =========================================================
+  // 全新的用户搜索与展示 BottomSheet
+  // =========================================================
+  void _showUserSearchSheet({required bool isGroup}) {
+    String searchQuery = '';
+    List<dynamic> allUsers = [];
+    bool isLoading = true;
+    Set<String> selectedIds = {};
+    final TextEditingController searchController = TextEditingController();
+    final TextEditingController groupNameController = TextEditingController();
+
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        builder: (context) {
+          return StatefulBuilder(
+              builder: (context, setModalState) {
+                // 首次打开时获取所有用户
+                if (isLoading && allUsers.isEmpty) {
+                  _supabase.from('users').select().neq('userID', _myID).then((data) {
+                    if (mounted) {
+                      setModalState(() {
+                        allUsers = data;
+                        isLoading = false;
+                      });
                     }
-                  },
-                  child: isLoading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text("Chat", style: TextStyle(color: Colors.white)),
-                ),
-              ],
-            );
-          }
-      ),
+                  }).catchError((error) {
+                    debugPrint("Error fetching users: $error");
+                    if (mounted) setModalState(() => isLoading = false);
+                  });
+                }
+
+                // 动态匹配搜索内容 (Username 不区分大小写模糊搜索)
+                List<dynamic> displayedUsers = [];
+                if (searchQuery.isNotEmpty) {
+                  displayedUsers = allUsers.where((u) {
+                    final name = (u['userName'] ?? '').toString().toLowerCase();
+                    return name.contains(searchQuery.toLowerCase());
+                  }).toList();
+                }
+
+                // 提取 Recent Chats 用户并去重
+                List<dynamic> recentUsers = [];
+                final seen = <String>{};
+                for (var c in _recentConversations) {
+                  final uid = c['partner_id'] ?? c['userID'];
+                  if (uid != null && seen.add(uid)) {
+                    recentUsers.add({
+                      'userID': uid,
+                      'userName': c['userName'],
+                      'userEmail': c['userEmail'], // 如果你的视图里有这个字段最好
+                      'userPhoto': c['userPhoto'],
+                    });
+                  }
+                }
+
+                // 用户列表项组件
+                Widget buildUserTile(dynamic u) {
+                  final isSelected = selectedIds.contains(u['userID']);
+                  final userName = u['userName'] ?? 'Unknown User';
+                  final userPhoto = u['userPhoto'];
+
+                  return ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: Colors.teal.shade100,
+                      backgroundImage: userPhoto != null ? NetworkImage(userPhoto) : null,
+                      child: userPhoto == null
+                          ? Text(userName.isNotEmpty ? userName[0].toUpperCase() : '?', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold))
+                          : null,
+                    ),
+                    title: Text(userName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: u['userEmail'] != null ? Text(u['userEmail'], style: TextStyle(color: Colors.grey[600], fontSize: 12)) : null,
+                    trailing: isGroup
+                        ? Checkbox(
+                      value: isSelected,
+                      activeColor: Colors.teal,
+                      onChanged: (val) {
+                        setModalState(() {
+                          if (val == true) selectedIds.add(u['userID']);
+                          else selectedIds.remove(u['userID']);
+                        });
+                      },
+                    )
+                        : null,
+                    onTap: () {
+                      if (isGroup) {
+                        setModalState(() {
+                          if (isSelected) selectedIds.remove(u['userID']);
+                          else selectedIds.add(u['userID']);
+                        });
+                      } else {
+                        // 直接跳去私聊页面
+                        Navigator.pop(context);
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: u['userID'], title: userName)));
+                      }
+                    },
+                  );
+                }
+
+                return Padding(
+                  padding: EdgeInsets.only(
+                      bottom: MediaQuery.of(context).viewInsets.bottom,
+                      top: 20, left: 16, right: 16
+                  ),
+                  child: SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.75,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Center(
+                          child: Text(isGroup ? "Create Group Chat" : "New Private Chat",
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        ),
+                        const SizedBox(height: 15),
+
+                        if (isGroup) ...[
+                          TextField(
+                            controller: groupNameController,
+                            decoration: InputDecoration(
+                              labelText: "Group Name",
+                              prefixIcon: const Icon(Icons.group, color: Colors.teal),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+
+                        TextField(
+                          controller: searchController,
+                          decoration: InputDecoration(
+                            hintText: "Search by username...",
+                            prefixIcon: const Icon(Icons.search, color: Colors.teal),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                            filled: true,
+                            fillColor: Colors.grey[100],
+                            suffixIcon: searchQuery.isNotEmpty ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  searchController.clear();
+                                  setModalState(() => searchQuery = '');
+                                }
+                            ) : null,
+                          ),
+                          onChanged: (val) => setModalState(() => searchQuery = val.trim()),
+                        ),
+                        const SizedBox(height: 10),
+
+                        Expanded(
+                          child: isLoading
+                              ? const Center(child: CircularProgressIndicator(color: Colors.teal))
+                              : searchQuery.isNotEmpty
+                              ? (displayedUsers.isEmpty
+                              ? const Center(child: Text("No users found."))
+                              : ListView.builder(
+                            itemCount: displayedUsers.length,
+                            itemBuilder: (_, i) => buildUserTile(displayedUsers[i]),
+                          ))
+                              : ListView(
+                            children: [
+                              if (recentUsers.isNotEmpty) ...[
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 8.0, horizontal: 4),
+                                  child: Text("Recent Chats", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+                                ),
+                                ...recentUsers.map((u) => buildUserTile(u)),
+                                const Divider(),
+                              ],
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 8.0, horizontal: 4),
+                                child: Text("All Registered Users", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
+                              ),
+                              if (allUsers.isEmpty)
+                                const Padding(
+                                  padding: EdgeInsets.all(8.0),
+                                  child: Text("No other users available.", style: TextStyle(color: Colors.grey)),
+                                ),
+                              ...allUsers.map((u) => buildUserTile(u)),
+                            ],
+                          ),
+                        ),
+
+                        if (isGroup)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10, bottom: 20),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.teal,
+                                    padding: const EdgeInsets.symmetric(vertical: 16),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+                                ),
+                                onPressed: selectedIds.isEmpty ? null : () => _submitGroupChat(selectedIds.toList(), groupNameController.text.trim(), context),
+                                child: Text("Create Group (${selectedIds.length})", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          )
+                      ],
+                    ),
+                  ),
+                );
+              }
+          );
+        }
     );
   }
 
@@ -146,224 +335,99 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
           tabs: const [Tab(text: "Private"), Tab(text: "Groups")],
         ),
       ),
-      body: Column(
+      body: TabBarView(
+        controller: _tabController,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Expanded(child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))), onPressed: _searchUserByEmail, icon: const Icon(Icons.search, size: 18), label: const Text("Search Email"))),
-                const SizedBox(width: 10),
-                Expanded(child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))), onPressed: () => showDialog(context: context, builder: (_) => const CreateGroupDialog()), icon: const Icon(Icons.group_add, size: 18), label: const Text("New Group"))),
-              ],
-            ),
-          ),
-          Expanded(
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                // 私聊列表
-                _recentConversations.isEmpty
-                    ? const Center(child: Text("No recent chats. Search an email to start!", style: TextStyle(color: Colors.grey)))
-                    : ListView.builder(
-                  itemCount: _recentConversations.length,
-                  itemBuilder: (context, index) {
-                    final user = _recentConversations[index];
-                    final String partnerId = user['partner_id'] ?? user['userID'];
-                    final String name = user['userName'] ?? 'Unknown';
-                    final String? avatarUrl = user['userPhoto'];
+          // 私聊列表
+          _recentConversations.isEmpty
+              ? const Center(child: Text("No recent chats.\nClick the + button to start one!", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))
+              : ListView.builder(
+            itemCount: _recentConversations.length,
+            itemBuilder: (context, index) {
+              final user = _recentConversations[index];
+              final String partnerId = user['partner_id'] ?? user['userID'];
+              final String name = user['userName'] ?? 'Unknown';
+              final String? avatarUrl = user['userPhoto'];
 
-                    int unreadCount = _privateUnread[partnerId] ?? 0;
+              int unreadCount = _privateUnread[partnerId] ?? 0;
 
-                    String timeString = '';
-                    if (user['timestamp'] != null) {
-                      try {
-                        final date = DateTime.parse(user['timestamp']).toLocal();
-                        timeString = (date.day == DateTime.now().day && date.month == DateTime.now().month)
-                            ? DateFormat('hh:mm a').format(date) : DateFormat('MMM dd').format(date);
-                      } catch (e) {}
-                    }
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: Colors.teal.shade100, backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
-                        child: avatarUrl == null ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)) : null,
-                      ),
-                      title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text(user['last_message'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: unreadCount > 0 ? Colors.black87 : Colors.black54, fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
-                      trailing: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(timeString, style: TextStyle(fontSize: 12, color: unreadCount > 0 ? Colors.teal : Colors.grey, fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
-                          if (unreadCount > 0)
-                            Container(
-                              margin: const EdgeInsets.only(top: 4),
-                              padding: const EdgeInsets.all(6),
-                              decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                              child: Text(unreadCount.toString(), style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                            ),
-                        ],
-                      ),
-                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: partnerId, title: name))),
-                    );
-                  },
+              String timeString = '';
+              if (user['timestamp'] != null) {
+                try {
+                  final date = DateTime.parse(user['timestamp']).toLocal();
+                  timeString = (date.day == DateTime.now().day && date.month == DateTime.now().month)
+                      ? DateFormat('hh:mm a').format(date) : DateFormat('MMM dd').format(date);
+                } catch (e) {}
+              }
+              return ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: Colors.teal.shade100, backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+                  child: avatarUrl == null ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)) : null,
                 ),
-                // 群聊列表
-                _myGroups.isEmpty
-                    ? const Center(child: Text("No groups yet. Create one!", style: TextStyle(color: Colors.grey)))
-                    : ListView.builder(
-                  itemCount: _myGroups.length,
-                  itemBuilder: (context, index) {
-                    final group = _myGroups[index];
-                    final String groupId = group['chatGroupID'];
-                    int unreadCount = _groupUnread[groupId] ?? 0;
-
-                    return ListTile(
-                      leading: CircleAvatar(backgroundColor: Colors.orange.shade100, child: const Icon(Icons.group, color: Colors.orange)),
-                      title: Text(group['groupName'] ?? 'Unnamed Group', style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text("Tap to enter group chat", style: TextStyle(color: unreadCount > 0 ? Colors.black87 : Colors.grey, fontSize: 12, fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
-                      trailing: unreadCount > 0
-                          ? Container(
+                title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text(user['last_message'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: unreadCount > 0 ? Colors.black87 : Colors.black54, fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
+                trailing: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(timeString, style: TextStyle(fontSize: 12, color: unreadCount > 0 ? Colors.teal : Colors.grey, fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
+                    if (unreadCount > 0)
+                      Container(
+                        margin: const EdgeInsets.only(top: 4),
                         padding: const EdgeInsets.all(6),
                         decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
                         child: Text(unreadCount.toString(), style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                      )
-                          : null,
-                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => GroupChatPage(groupID: groupId, groupName: group['groupName']))),
-                    );
-                  },
+                      ),
+                  ],
                 ),
-              ],
-            ),
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: partnerId, title: name))),
+              );
+            },
+          ),
+          // 群聊列表
+          _myGroups.isEmpty
+              ? const Center(child: Text("No groups yet.\nClick the + button to create one!", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))
+              : ListView.builder(
+            itemCount: _myGroups.length,
+            itemBuilder: (context, index) {
+              final group = _myGroups[index];
+              final String groupId = group['chatGroupID'];
+              int unreadCount = _groupUnread[groupId] ?? 0;
+
+              return ListTile(
+                leading: CircleAvatar(backgroundColor: Colors.orange.shade100, child: const Icon(Icons.group, color: Colors.orange)),
+                title: Text(group['groupName'] ?? 'Unnamed Group', style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text("Tap to enter group chat", style: TextStyle(color: unreadCount > 0 ? Colors.black87 : Colors.grey, fontSize: 12, fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal)),
+                trailing: unreadCount > 0
+                    ? Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                  child: Text(unreadCount.toString(), style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                )
+                    : null,
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => GroupChatPage(groupID: groupId, groupName: group['groupName']))),
+              );
+            },
           ),
         ],
       ),
-    );
-  }
-}
-
-// ==========================================
-// 2. 创建群组对话框 (建立时分配 Owner 身份)
-// ==========================================
-class CreateGroupDialog extends StatefulWidget {
-  const CreateGroupDialog({super.key});
-  @override
-  State<CreateGroupDialog> createState() => _CreateGroupDialogState();
-}
-
-class _CreateGroupDialogState extends State<CreateGroupDialog> {
-  final _supabase = Supabase.instance.client;
-  final _groupNameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final List<Map<String, dynamic>> _selectedUsers = [];
-  bool _isLoading = false;
-  String? _errorMessage;
-
-  void _addEmail() async {
-    final email = _emailController.text.trim();
-    if (email.isEmpty) return;
-
-    setState(() { _errorMessage = null; _isLoading = true; });
-
-    if (_selectedUsers.any((u) => u['userEmail'] == email)) {
-      setState(() { _errorMessage = "User already added in the list!"; _isLoading = false; });
-      return;
-    }
-
-    try {
-      final res = await _supabase.from('users').select().eq('userEmail', email).maybeSingle();
-      if (res != null) {
-        if (res['userID'] == _supabase.auth.currentUser!.id) {
-          setState(() => _errorMessage = "You will be the Owner automatically!");
-        } else {
-          setState(() { _selectedUsers.add(res); _emailController.clear(); });
-        }
-      } else {
-        setState(() => _errorMessage = "User not found in database!");
-      }
-    } catch (e) {
-      setState(() => _errorMessage = "Error checking user.");
-    }
-    setState(() => _isLoading = false);
-  }
-
-  Future<void> _createGroup() async {
-    final groupName = _groupNameController.text.trim();
-    setState(() => _errorMessage = null);
-
-    if (groupName.isEmpty || _selectedUsers.isEmpty) {
-      setState(() => _errorMessage = "Please enter group name & add at least 1 user.");
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    try {
-      final String groupID = "CG${Random().nextInt(99999999)}";
-      final String myID = _supabase.auth.currentUser!.id;
-      await _supabase.from('ChatGroup').insert({'chatGroupID': groupID, 'groupName': groupName, 'isPublic': false});
-
-      // 创建者设为 Owner
-      await _supabase.from('GroupMembers').insert({'chatGroupID': groupID, 'userID': myID, 'role': 'Owner'});
-
-      final membersData = _selectedUsers.map((u) => {'chatGroupID': groupID, 'userID': u['userID'], 'role': 'Member'}).toList();
-      await _supabase.from('GroupMembers').insert(membersData);
-
-      if (mounted) {
-        Navigator.pop(context);
-        Navigator.push(context, MaterialPageRoute(builder: (_) => GroupChatPage(groupID: groupID, groupName: groupName)));
-      }
-    } catch (e) {
-      setState(() => _errorMessage = "Failed to create group.");
-    }
-    setState(() => _isLoading = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text("Create Group"),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(controller: _groupNameController, decoration: const InputDecoration(labelText: "Group Name", border: OutlineInputBorder())),
-            const SizedBox(height: 15),
-            Row(
-              children: [
-                Expanded(child: TextField(controller: _emailController, decoration: const InputDecoration(hintText: "user@email.com", isDense: true))),
-                IconButton(
-                    icon: _isLoading ? const SizedBox(width:20, height:20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.add_circle, color: Colors.teal),
-                    onPressed: _isLoading ? null : _addEmail
-                )
-              ],
-            ),
-            if (_errorMessage != null) ...[
-              const SizedBox(height: 5),
-              Text(_errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
-            ],
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              children: _selectedUsers.map((u) => Chip(
-                label: Text(u['userName'] ?? u['userEmail'], style: const TextStyle(fontSize: 12)),
-                deleteIcon: const Icon(Icons.cancel, size: 16),
-                onDeleted: () => setState(() => _selectedUsers.remove(u)),
-              )).toList(),
-            )
-          ],
-        ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          if (_tabController.index == 0) {
+            _showUserSearchSheet(isGroup: false);
+          } else {
+            _showUserSearchSheet(isGroup: true);
+          }
+        },
+        backgroundColor: Colors.teal,
+        child: const Icon(Icons.add, color: Colors.white),
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
-        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.teal), onPressed: _isLoading ? null : _createGroup, child: const Text("Create", style: TextStyle(color: Colors.white))),
-      ],
     );
   }
 }
 
 // ==========================================
-// 3. 私聊页面 (加入已读标记功能)
+// 2. 私聊页面 (加入已读标记功能)
 // ==========================================
 class ChatPage extends StatefulWidget {
   final String targetUserID;
@@ -502,7 +566,7 @@ class _ChatPageState extends State<ChatPage> {
                       mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        if (!isMe) CircleAvatar(radius: 16, backgroundColor: Colors.teal.shade200, child: Text(senderName[0].toUpperCase(), style: const TextStyle(color: Colors.white))),
+                        if (!isMe) CircleAvatar(radius: 16, backgroundColor: Colors.teal.shade200, child: Text(senderName.isNotEmpty ? senderName[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white))),
                         if (!isMe) const SizedBox(width: 8),
                         Flexible(
                           child: Column(
@@ -546,7 +610,7 @@ class _ChatPageState extends State<ChatPage> {
 }
 
 // ==========================================
-// 4. 群聊页面 (加入已读标记功能)
+// 3. 群聊页面 (加入已读标记功能)
 // ==========================================
 class GroupChatPage extends StatefulWidget {
   final String groupID;
@@ -743,7 +807,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                     child: Row(
                       mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start, crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        if (!isMe) CircleAvatar(radius: 16, backgroundColor: Colors.orange.shade200, child: Text(senderName[0].toUpperCase(), style: const TextStyle(color: Colors.white))),
+                        if (!isMe) CircleAvatar(radius: 16, backgroundColor: Colors.orange.shade200, child: Text(senderName.isNotEmpty ? senderName[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white))),
                         if (!isMe) const SizedBox(width: 8),
                         Flexible(
                           child: Column(
@@ -787,7 +851,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
 }
 
 // ==========================================
-// 5. 群组成员管理面板 (Owner/Admin 权限分级)
+// 4. 群组成员管理面板 (Owner/Admin 权限分级)
 // ==========================================
 class GroupManageDialog extends StatefulWidget {
   final String groupID;
@@ -936,7 +1000,6 @@ class _GroupManageDialogState extends State<GroupManageDialog> {
 
             if (!isMe) {
               if (widget.myRole == 'Owner') {
-                // Owner 可以操作 Admin 和 Member
                 if (role == 'Admin') {
                   menuItems.add(const PopupMenuItem(value: 'demote', child: Text("Demote to Member")));
                   menuItems.add(const PopupMenuItem(value: 'kick', child: Text("Kick User", style: TextStyle(color: Colors.red))));
@@ -945,7 +1008,6 @@ class _GroupManageDialogState extends State<GroupManageDialog> {
                   menuItems.add(const PopupMenuItem(value: 'kick', child: Text("Kick User", style: TextStyle(color: Colors.red))));
                 }
               } else if (widget.myRole == 'Admin') {
-                // Admin 只能踢掉 Member
                 if (role == 'Member') {
                   menuItems.add(const PopupMenuItem(value: 'kick', child: Text("Kick User", style: TextStyle(color: Colors.red))));
                 }

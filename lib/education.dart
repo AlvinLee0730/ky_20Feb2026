@@ -4,6 +4,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart'; // 用于打开视频链接
 
+// 确保导入私聊页面
+import 'chat.dart';
+
 // 预设的专业宠物教育分类
 const List<String> educationCategories = [
   'Health & Wellness',
@@ -31,7 +34,7 @@ class _EducationPageState extends State<EducationPage> {
     super.initState();
     _checkUserRole();
     // 全局初始化 Stream 保证不闪烁
-    _educationStream = _supabase.from('pet_material').stream(primaryKey: ['materialID']);
+    _educationStream = _supabase.from('pet_material').stream(primaryKey: ['materialID']).order('materialID', ascending: false);
   }
 
   Future<void> _checkUserRole() async {
@@ -99,10 +102,23 @@ class _EducationPageState extends State<EducationPage> {
     final titleController = TextEditingController(text: item?['title']);
     final contentController = TextEditingController(text: item?['content']);
 
-    String selectedCategory = item?['category'] ?? educationCategories.first;
-    if (!educationCategories.contains(selectedCategory)) {
-      selectedCategory = educationCategories.first;
+    // 🌟 处理自定义分类的逻辑
+    String selectedCategory = educationCategories.first;
+    bool isCustomCategory = false;
+    final customCategoryController = TextEditingController();
+
+    if (item != null && item['category'] != null) {
+      if (educationCategories.contains(item['category'])) {
+        selectedCategory = item['category'];
+      } else {
+        selectedCategory = 'Add Custom'; // 🌟 改为 Add Custom
+        isCustomCategory = true;
+        customCategoryController.text = item['category'];
+      }
     }
+
+    // 🌟 加入 'Add Custom' 作为下拉菜单的最后一项
+    final List<String> dropdownOptions = [...educationCategories, 'Add Custom'];
 
     // 0: Images, 1: Local Video, 2: YouTube
     int mediaTypeIndex = 0;
@@ -143,13 +159,19 @@ class _EducationPageState extends State<EducationPage> {
                 }
 
                 Future<void> savePost() async {
-                  // 验证：跳出错误弹窗
+                  // 决定最终要保存的 category
+                  String finalCategory = isCustomCategory ? customCategoryController.text.trim() : selectedCategory;
+
+                  if (finalCategory.isEmpty) {
+                    _showErrorDialog('Please enter a category!');
+                    return;
+                  }
+
                   if (titleController.text.trim().isEmpty || contentController.text.trim().isEmpty) {
                     _showErrorDialog('Title and Content are required!');
                     return;
                   }
 
-                  // 验证YouTube链接：跳出错误弹窗
                   if (mediaTypeIndex == 2 && youtubeController.text.trim().isEmpty) {
                     _showErrorDialog('Please enter a valid YouTube URL!');
                     return;
@@ -189,7 +211,7 @@ class _EducationPageState extends State<EducationPage> {
                     final postData = {
                       'title': titleController.text.trim(),
                       'content': contentController.text.trim(),
-                      'category': selectedCategory,
+                      'category': finalCategory, // 使用最终决定好的 category
                       'mediaURLs': uploadedImageUrls.isNotEmpty ? uploadedImageUrls : (item?['mediaURLs'] ?? []),
                       'videoURL': finalVideoUrl ?? item?['videoURL'],
                     };
@@ -213,7 +235,6 @@ class _EducationPageState extends State<EducationPage> {
                     }
                   } catch (e) {
                     debugPrint(e.toString());
-                    // 保存失败也会弹出错误框
                     _showErrorDialog('Error saving post: $e');
                   } finally {
                     setModalState(() => isSaving = false);
@@ -235,22 +256,39 @@ class _EducationPageState extends State<EducationPage> {
 
                         const Text("Category", style: TextStyle(fontWeight: FontWeight.bold)),
                         Container(
-                          margin: const EdgeInsets.only(top: 5, bottom: 15),
+                          margin: const EdgeInsets.only(top: 5, bottom: 10),
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)),
                           child: DropdownButtonHideUnderline(
                             child: DropdownButton<String>(
                               isExpanded: true,
                               value: selectedCategory,
-                              items: educationCategories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                              items: dropdownOptions.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
                               onChanged: (val) {
-                                if (val != null) setModalState(() {
-                                  selectedCategory = val;
-                                });
+                                if (val != null) {
+                                  setModalState(() {
+                                    selectedCategory = val;
+                                    isCustomCategory = (val == 'Add Custom'); // 🌟 判断是否是 Add Custom
+                                  });
+                                }
                               },
                             ),
                           ),
                         ),
+
+                        // 如果选了 Add Custom，展示输入框让用户自己写
+                        if (isCustomCategory) ...[
+                          TextField(
+                            controller: customCategoryController,
+                            decoration: const InputDecoration(
+                                labelText: "Please specify custom category",
+                                border: OutlineInputBorder()
+                            ),
+                          ),
+                          const SizedBox(height: 15),
+                        ] else ...[
+                          const SizedBox(height: 5),
+                        ],
 
                         TextField(
                           controller: titleController,
@@ -355,7 +393,11 @@ class _EducationPageState extends State<EducationPage> {
                 final currentUserId = _supabase.auth.currentUser?.id;
                 List<Map<String, dynamic>> items = snapshot.data!.where((item) {
                   bool isApprovedOrMine = item['isApproved'] == true || item['userID'] == currentUserId || _userRole == 'Admin';
+
+                  // 如果是选了 All 或者是预设分类，进行匹配
+                  // 如果这篇帖子是自定义分类，且没有选中这个预设分类，它也会在 'All' 里面显示
                   bool matchesFilter = _selectedFilterCategory == 'All' || item['category'] == _selectedFilterCategory;
+
                   return isApprovedOrMine && matchesFilter;
                 }).toList();
 
@@ -459,11 +501,57 @@ class _EducationPageState extends State<EducationPage> {
 }
 
 // ==========================================
-// 详情页：支持多图滑动和视频链接跳转
+// 🌟 详情页
 // ==========================================
-class EducationDetailScreen extends StatelessWidget {
+class EducationDetailScreen extends StatefulWidget {
   final Map<String, dynamic> article;
   const EducationDetailScreen({super.key, required this.article});
+
+  @override
+  State<EducationDetailScreen> createState() => _EducationDetailScreenState();
+}
+
+class _EducationDetailScreenState extends State<EducationDetailScreen> {
+  final _supabase = Supabase.instance.client;
+
+  // 发帖人信息
+  String _authorName = "Unknown User";
+  String? _authorPhoto;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAuthorData();
+  }
+
+  // 从 users 表抓取头像和名字
+  Future<void> _loadAuthorData() async {
+    try {
+      final userId = widget.article['userID'];
+      if (userId != null) {
+        final userRes = await _supabase.from('users').select('userName, userPhoto').eq('userID', userId).maybeSingle();
+        if (mounted && userRes != null) {
+          setState(() {
+            _authorName = userRes['userName'] ?? userId;
+            _authorPhoto = userRes['userPhoto'];
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Load author error: $e");
+    }
+  }
+
+  // 跳转去私聊
+  void _goToChat(String? targetId, String targetName) {
+    final myId = _supabase.auth.currentUser?.id;
+    if (targetId == null) return;
+    if (targetId == myId) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("You cannot start a chat with yourself.")));
+      return;
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: targetId, title: targetName)));
+  }
 
   Future<void> _launchVideoUrl(BuildContext context, String url) async {
     String finalUrl = url.trim();
@@ -490,13 +578,13 @@ class EducationDetailScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     List<String> images = [];
-    if (article['mediaURLs'] != null) {
-      images = List<String>.from(article['mediaURLs']);
-    } else if (article['mediaURL'] != null && article['mediaURL'].toString().isNotEmpty) {
-      images.add(article['mediaURL']);
+    if (widget.article['mediaURLs'] != null) {
+      images = List<String>.from(widget.article['mediaURLs']);
+    } else if (widget.article['mediaURL'] != null && widget.article['mediaURL'].toString().isNotEmpty) {
+      images.add(widget.article['mediaURL']);
     }
 
-    final String? videoUrl = article['videoURL'];
+    final String? videoUrl = widget.article['videoURL'];
 
     return Scaffold(
       appBar: AppBar(
@@ -547,12 +635,53 @@ class EducationDetailScreen extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(color: Colors.teal.shade50, borderRadius: BorderRadius.circular(15)),
-                    child: Text(article['category'] ?? 'General Care', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)),
+                    child: Text(widget.article['category'] ?? 'General Care', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)),
                   ),
                   const SizedBox(height: 15),
-                  Text(article['title'] ?? '', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                  Text(widget.article['title'] ?? '', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 15),
+
+                  // ==========================================
+                  // 🌟 Clickable 聊天头像栏
+                  // ==========================================
+                  InkWell(
+                    onTap: () {
+                      final targetId = widget.article['userID'];
+                      _goToChat(targetId, _authorName);
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircleAvatar(
+                            radius: 14,
+                            backgroundColor: Colors.grey.shade200,
+                            backgroundImage: _authorPhoto != null ? NetworkImage(_authorPhoto!) : null,
+                            child: _authorPhoto == null ? const Icon(Icons.person, size: 18, color: Colors.grey) : null,
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              "Posted by $_authorName",
+                              style: const TextStyle(
+                                color: Colors.teal,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.chat, size: 14, color: Colors.teal),
+                        ],
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 20),
-                  Text(article['content'] ?? '', style: const TextStyle(fontSize: 16, height: 1.5)),
+                  // ==========================================
+
+                  Text(widget.article['content'] ?? '', style: const TextStyle(fontSize: 16, height: 1.5)),
                   const SizedBox(height: 40),
                 ],
               ),
