@@ -274,26 +274,46 @@ class _LostAndFoundPageState extends State<LostAndFoundPage> {
                   decoration: const InputDecoration(labelText: "Gender", border: OutlineInputBorder()),
                 ),
                 const SizedBox(height: 15),
-                // Contact
+
+                // 🌟 Contact (修复了文字溢出的问题)
                 Row(
                   children: [
                     Expanded(
-                      flex: 1,
+                      flex: 2,
                       child: DropdownButtonFormField<String>(
+                        isExpanded: true,
                         value: _contactType,
-                        items: ['Phone', 'Email', 'Facebook', 'Instagram'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 15),
+                        ),
+                        items: ['Phone', 'Email', 'Facebook', 'Instagram'].map((e) => DropdownMenuItem(
+                            value: e,
+                            child: Text(
+                              e,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13),
+                            )
+                        )).toList(),
                         onChanged: (v) => setModalState(() => _contactType = v!),
-                        decoration: const InputDecoration(border: OutlineInputBorder()),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      flex: 2,
-                      child: TextField(controller: _contactController, decoration: const InputDecoration(labelText: "Contact Info", border: OutlineInputBorder())),
+                      flex: 3,
+                      child: TextField(
+                          controller: _contactController,
+                          decoration: const InputDecoration(
+                            labelText: "Contact Info",
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 15),
+                          )
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 15),
+
                 // Remark
                 TextField(controller: _remarkController, decoration: const InputDecoration(labelText: "Remark (Max 100 chars)", border: OutlineInputBorder()), maxLength: 100),
                 const SizedBox(height: 15),
@@ -746,7 +766,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
   late Map<String, dynamic> _currentPost;
   bool _isLoading = false;
 
-  // 🌟 新增：获取发帖人信息
+  // 获取发帖人信息
   String _authorName = "Unknown User";
   String? _authorPhoto;
 
@@ -757,7 +777,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
     _loadAuthorData(); // 加载发帖人信息
   }
 
-  // 🌟 新增：从 users 表抓取头像和名字
+  // 从 users 表抓取头像和名字
   Future<void> _loadAuthorData() async {
     try {
       final userRes = await _supabase.from('users').select('userName, userPhoto').eq('userID', widget.post['userID']).maybeSingle();
@@ -772,7 +792,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
     }
   }
 
-  // 🌟 新增：跳转去私聊
+  // 跳转去私聊
   void _goToChat(String? targetId, String targetName) {
     final myId = _supabase.auth.currentUser?.id;
     if (targetId == null) return;
@@ -896,18 +916,32 @@ class _PostDetailPageState extends State<PostDetailPage> {
                 Row(
                   children: [
                     Expanded(
-                      flex: 1,
+                      flex: 2,
                       child: DropdownButtonFormField<String>(
+                        isExpanded: true,
                         value: ['Phone', 'Email', 'Facebook', 'Instagram'].contains(cType) ? cType : 'Phone',
-                        items: ['Phone', 'Email', 'Facebook', 'Instagram'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                        items: ['Phone', 'Email', 'Facebook', 'Instagram'].map((e) => DropdownMenuItem(
+                            value: e,
+                            child: Text(e, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))
+                        )).toList(),
                         onChanged: (v) => setModalState(() => cType = v!),
-                        decoration: const InputDecoration(border: OutlineInputBorder()),
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 15),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      flex: 2,
-                      child: TextField(controller: conCtrl, decoration: const InputDecoration(labelText: "Contact Info", border: OutlineInputBorder())),
+                      flex: 3,
+                      child: TextField(
+                          controller: conCtrl,
+                          decoration: const InputDecoration(
+                            labelText: "Contact Info",
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 15),
+                          )
+                      ),
                     ),
                   ],
                 ),
@@ -922,7 +956,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
                     final newContact = "$cType: ${conCtrl.text.trim()}";
 
                     try {
-                      await _supabase.from(table).update({
+                      await Supabase.instance.client.from(table).update({
                         'location': locCtrl.text.trim(),
                         'remark': remCtrl.text.trim(),
                         'contactInfo': newContact,
@@ -965,7 +999,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
       imageUrl = _currentPost['photoURL'].toString().split(',').first;
     }
 
-    final isMe = _currentPost['userID'] == _supabase.auth.currentUser?.id;
+    final isMe = _currentPost['userID'] == Supabase.instance.client.auth.currentUser?.id;
     final isLost = widget.type == 'Lost';
     final String status = _currentPost['status'] ?? 'Active';
 
@@ -1008,7 +1042,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
             const SizedBox(height: 10),
 
             // ==========================================
-            // 🌟 新增：像 Pet Adoption 一样的 Clickable 聊天头像栏
+            // 🌟 Clickable 聊天头像栏
             // ==========================================
             InkWell(
               onTap: () {
@@ -1146,7 +1180,6 @@ class _PostDetailPageState extends State<PostDetailPage> {
                 ],
               ),
             ],
-            // ❌ 已经移除了之前的 else 里的 Contact Owner 大按钮
             const SizedBox(height: 30),
           ],
         ),
