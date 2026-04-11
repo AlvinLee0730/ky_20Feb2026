@@ -383,23 +383,56 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   }
 
   // --- UI 组件: 预算 ---
+  // --- UI 组件: 预算 ---
   Widget _buildBudgetTracker(double spent) {
     double budget = _currentMonthBudget;
+    double remaining = budget - spent;
     double progress = (spent / budget).clamp(0, 1);
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 20, 16, 0),
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(color: Colors.grey[50], borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.grey[200]!)),
+      decoration: BoxDecoration(
+          color: Colors.grey[50],
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.grey[200]!)
+      ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const Text("Monthly Budget Usage", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          const SizedBox(height: 15),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text("Monthly Budget Usage", style: TextStyle(fontWeight: FontWeight.w600)),
-              Text("RM ${spent.toStringAsFixed(0)} / ${budget.toInt()}"),
+              // 当前已用金额
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Currently Used", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  const SizedBox(height: 4),
+                  Text("RM ${spent.toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.teal)),
+                ],
+              ),
+              // 剩余金额
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  const Text("Remaining Budget", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  const SizedBox(height: 4),
+                  Text(
+                      remaining >= 0 ? "RM ${remaining.toStringAsFixed(2)}" : "-RM ${(-remaining).toStringAsFixed(2)}",
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: remaining >= 0 ? Colors.black87 : Colors.redAccent // 超出预算自动变红
+                      )
+                  ),
+                ],
+              ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 15),
           ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: LinearProgressIndicator(

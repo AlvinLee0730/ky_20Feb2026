@@ -160,7 +160,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
       _showError("Please select at least one photo."); return;
     }
 
-    // 🌟 修改：自动计算年龄，如果是 Unknown 则默认为 0，防止报错
     int calculatedAge = 0;
     if (_dobController.text.isNotEmpty && _dobController.text != 'Unknown') {
       try {
@@ -181,7 +180,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
       final user = _supabase.auth.currentUser;
       String? imageUrlsStr = existingImageUrl;
 
-      // 上传所有新图片
       if (_newImageFiles.isNotEmpty) {
         List<String> finalUrls = existingImageUrl != null && existingImageUrl.isNotEmpty
             ? existingImageUrl.split(',').where((e) => e.isNotEmpty).toList()
@@ -205,6 +203,7 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
         'remark': _remarkController.text.trim(),
         'photoURL': imageUrlsStr,
         'isApproved': _userRole == 'Admin',
+        'status': 'Active', // 🌟 新增：发布时默认设置为 Active
         'vaccineBrand': _vaccinated ? _vaccineBrandController.text.trim() : null,
         'lastVaccinationDate': _vaccinated ? _vaccineDateController.text : null,
         'nextDoseDate': _vaccinated ? _nextDoseController.text : null,
@@ -217,6 +216,7 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
       } else {
         postData['adoptionPostID'] = await _generateAdoptionID();
         postData['userID'] = user!.id;
+        postData['uploadDate'] = DateTime.now().toIso8601String();
         await _supabase.from('adoption_posts').insert(postData);
       }
       if (mounted) {
@@ -465,13 +465,13 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
 
   Widget _buildGridItem(Map<String, dynamic> post, String? currentUserId) {
     bool isPending = post['isApproved'] == false;
+    bool isAdopted = post['status'] == 'Adopted'; // 🌟 检查是否已被领养
 
     String? firstImageUrl;
     if (post['photoURL'] != null && post['photoURL'].toString().isNotEmpty) {
       firstImageUrl = post['photoURL'].toString().split(',').first;
     }
 
-    // 🌟 修改：动态判断如果 Date of Birth 是 Unknown，则列表页显示 Unknown age
     String ageDisplay = post['dateOfBirth'] == 'Unknown' ? 'Unknown age' : '${post['age']}y';
 
     return Card(
@@ -493,7 +493,17 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
                       ? Image.network(firstImageUrl, width: double.infinity, height: double.infinity, fit: BoxFit.cover)
                       : Container(color: Colors.grey[200], child: const Center(child: Icon(Icons.pets, color: Colors.grey))),
 
-                  if (isPending)
+                  // 🌟 领养/待审核徽章显示
+                  if (isAdopted)
+                    Positioned(
+                      top: 10, right: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(20)),
+                        child: const Text("ADOPTED", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                      ),
+                    )
+                  else if (isPending)
                     Positioned(
                       top: 10, left: 10,
                       child: Container(
@@ -562,7 +572,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setModalState) {
-          // 🌟 追踪 DOB 是否为 Unknown
           bool isDobUnknown = _dobController.text == 'Unknown';
 
           return Padding(
@@ -616,7 +625,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
                   TextField(controller: _petNameController, decoration: const InputDecoration(labelText: "Pet Name")),
                   TextField(controller: _breedController, decoration: const InputDecoration(labelText: "Breed")),
 
-                  // 🌟 修改：支持输入 Date of Birth 或者 选择 Unknown
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
@@ -631,7 +639,7 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
                             fillColor: isDobUnknown ? Colors.grey.shade200 : null,
                           ),
                           onTap: () async {
-                            if (isDobUnknown) return; // 勾选 Unknown 后不可选择日期
+                            if (isDobUnknown) return;
                             DateTime? picked = await showDatePicker(
                               context: context,
                               initialDate: DateTime.now(),
@@ -762,18 +770,22 @@ class _PetDetailPageState extends State<PetDetailPage> {
   String? _authorPhoto;
   int _currentImageIndex = 0;
 
+  // 🌟 使用 _currentPost 以便动态刷新状态
+  late Map<String, dynamic> _currentPost;
+
   @override
   void initState() {
     super.initState();
+    _currentPost = Map<String, dynamic>.from(widget.post);
     _loadAuthorData();
   }
 
   Future<void> _loadAuthorData() async {
     try {
-      final userRes = await _supabase.from('users').select('userName, userPhoto').eq('userID', widget.post['userID']).maybeSingle();
+      final userRes = await _supabase.from('users').select('userName, userPhoto').eq('userID', _currentPost['userID']).maybeSingle();
       if (mounted && userRes != null) {
         setState(() {
-          _authorName = userRes['userName'] ?? widget.post['userID'];
+          _authorName = userRes['userName'] ?? _currentPost['userID'];
           _authorPhoto = userRes['userPhoto'];
         });
       }
@@ -792,23 +804,60 @@ class _PetDetailPageState extends State<PetDetailPage> {
     Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: targetId, title: targetName)));
   }
 
+  // 🌟 新增：将宠物标记为已领养
+  Future<void> _markAsAdopted() async {
+    bool confirm = await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("Mark as Adopted?", style: TextStyle(fontWeight: FontWeight.bold)),
+          content: const Text("Are you sure you want to mark this pet as adopted? This means the pet has successfully found a new home! \n\n(This action cannot be undone)"),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Confirm", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        )
+    ) ?? false;
+
+    if (!confirm) return;
+
+    try {
+      await _supabase.from('adoption_posts').update({'status': 'Adopted'}).eq('adoptionPostID', _currentPost['adoptionPostID']);
+
+      if (mounted) {
+        setState(() {
+          _currentPost['status'] = 'Adopted';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("🎉 Wonderful! Pet marked as adopted!"), backgroundColor: Colors.green));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final dateStr = widget.post['uploadDate'] ?? DateTime.now().toString();
+    final dateStr = _currentPost['uploadDate'] ?? DateTime.now().toString();
     final formattedDate = DateFormat('dd MMM yyyy').format(DateTime.parse(dateStr));
 
     List<String> imageUrls = [];
-    if (widget.post['photoURL'] != null && widget.post['photoURL'].toString().isNotEmpty) {
-      imageUrls = widget.post['photoURL'].toString().split(',').where((e) => e.isNotEmpty).toList();
+    if (_currentPost['photoURL'] != null && _currentPost['photoURL'].toString().isNotEmpty) {
+      imageUrls = _currentPost['photoURL'].toString().split(',').where((e) => e.isNotEmpty).toList();
     }
 
-    // 🌟 详情页动态判断 Age
-    String ageDisplay = widget.post['dateOfBirth'] == 'Unknown' ? 'Unknown' : "${widget.post['age']} years";
+    String ageDisplay = _currentPost['dateOfBirth'] == 'Unknown' ? 'Unknown' : "${_currentPost['age']} years";
+
+    // 🌟 判断状态
+    final isMe = _currentPost['userID'] == _supabase.auth.currentUser?.id;
+    final isAdopted = _currentPost['status'] == 'Adopted';
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: Text(widget.post['petName']),
+        title: Text(_currentPost['petName']),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
         elevation: 0,
@@ -861,13 +910,23 @@ class _PetDetailPageState extends State<PetDetailPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(widget.post['petName'], style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+                  // 🌟 领养状态徽章
+                  if (isAdopted) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(8)),
+                      child: const Text("ADOPTED", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+
+                  Text(_currentPost['petName'], style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
 
                   // Clickable Uploaded By
                   InkWell(
                     onTap: () {
-                      final targetId = widget.post['userID'];
+                      final targetId = _currentPost['userID'];
                       _goToChat(targetId, _authorName);
                     },
                     borderRadius: BorderRadius.circular(10),
@@ -904,30 +963,50 @@ class _PetDetailPageState extends State<PetDetailPage> {
                   Text("Posted on: $formattedDate", style: const TextStyle(color: Colors.grey)),
 
                   const Divider(height: 30),
-                  _rowItem(Icons.pets, "Breed", widget.post['breed'] ?? "Unknown"),
-                  if (widget.post['dateOfBirth'] != null)
-                    _rowItem(Icons.calendar_today, "Date of Birth", widget.post['dateOfBirth']),
+                  _rowItem(Icons.pets, "Breed", _currentPost['breed'] ?? "Unknown"),
+                  if (_currentPost['dateOfBirth'] != null)
+                    _rowItem(Icons.calendar_today, "Date of Birth", _currentPost['dateOfBirth']),
 
-                  // 🌟 替换掉原本直接写死的 age
                   _rowItem(Icons.hourglass_bottom, "Age", ageDisplay),
-                  _rowItem(Icons.health_and_safety, "Vaccinated", widget.post['vaccinated'] == true ? "Yes" : "No"),
+                  _rowItem(Icons.health_and_safety, "Vaccinated", _currentPost['vaccinated'] == true ? "Yes" : "No"),
 
-                  if (widget.post['vaccinated'] == true) ...[
-                    if (widget.post['vaccineBrand'] != null && widget.post['vaccineBrand'].toString().isNotEmpty)
-                      _rowItem(Icons.medication, "Brand", widget.post['vaccineBrand']),
-                    if (widget.post['lastVaccinationDate'] != null)
-                      _rowItem(Icons.calendar_month, "Last Dose", widget.post['lastVaccinationDate']),
-                    if (widget.post['nextDoseDate'] != null)
-                      _rowItem(Icons.event_repeat, "Next Due", widget.post['nextDoseDate']),
-                    if (widget.post['vaccineRemark'] != null && widget.post['vaccineRemark'].toString().isNotEmpty)
-                      _rowItem(Icons.note_alt, "Vaccine Remarks", widget.post['vaccineRemark']),
+                  if (_currentPost['vaccinated'] == true) ...[
+                    if (_currentPost['vaccineBrand'] != null && _currentPost['vaccineBrand'].toString().isNotEmpty)
+                      _rowItem(Icons.medication, "Brand", _currentPost['vaccineBrand']),
+                    if (_currentPost['lastVaccinationDate'] != null)
+                      _rowItem(Icons.calendar_month, "Last Dose", _currentPost['lastVaccinationDate']),
+                    if (_currentPost['nextDoseDate'] != null)
+                      _rowItem(Icons.event_repeat, "Next Due", _currentPost['nextDoseDate']),
+                    if (_currentPost['vaccineRemark'] != null && _currentPost['vaccineRemark'].toString().isNotEmpty)
+                      _rowItem(Icons.note_alt, "Vaccine Remarks", _currentPost['vaccineRemark']),
                   ],
 
                   const SizedBox(height: 20),
                   const Text("Remarks:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.teal)),
                   const SizedBox(height: 5),
-                  Text(widget.post['remark'] ?? "No remarks.", style: const TextStyle(fontSize: 16)),
+                  Text(_currentPost['remark'] ?? "No remarks.", style: const TextStyle(fontSize: 16)),
                   const SizedBox(height: 30),
+
+                  // 🌟 主人专属按钮区
+                  if (isMe && !isAdopted) ...[
+                    const Divider(),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _markAsAdopted,
+                        icon: const Icon(Icons.verified, color: Colors.white),
+                        label: const Text("MARK AS ADOPTED", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          elevation: 2,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+                  ]
                 ],
               ),
             ),

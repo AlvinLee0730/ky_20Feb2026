@@ -210,17 +210,17 @@ class _PetProfilePageState extends State<PetProfilePage> {
         final String ageText = _calculateAge(pet['birthDate']);
 
         // Vaccine status
-        String vaccineStatus = "Protected";
+        String vaccineStatus = "Valid Vaccination Date";
         Color vaccineColor = Colors.green;
 
         if (pet['vaccinationExpiry'] != null) {
           final expiryDate = DateTime.tryParse(pet['vaccinationExpiry'].toString());
           if (expiryDate != null) {
             if (_isVaccineExpired(expiryDate)) {
-              vaccineStatus = "Expired!";
+              vaccineStatus = "Invalid Vaccination Date!";
               vaccineColor = Colors.red;
             } else if (_isVaccineExpiringSoon(expiryDate)) {
-              vaccineStatus = "Due soon!";
+              vaccineStatus = "Vaccination Due soon!";
               vaccineColor = Colors.orange;
             }
           }
