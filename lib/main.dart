@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 
-// Your existing local files
 import 'lost_and_found.dart';
 import 'pet_adoption.dart';
 import 'education.dart';
@@ -72,23 +71,22 @@ class MainNavigation extends StatefulWidget {
 
 class _MainNavigationState extends State<MainNavigation> {
   int _selectedIndex = 2;
-  int _totalUnreadChats = 0; // 新增：全局未读聊天总数
+  int _totalUnreadChats = 0;
   Timer? _chatBadgeTimer;
   final _supabase = Supabase.instance.client;
 
   final List<Widget> _pages = [
-    const ExpenseTrackingPage(), // Index 0
-    const ChatModuleList(),      // Index 1
-    const HomePage(),            // Index 2
-    const PetProfilePage(),      // Index 3
-    const ProfilePage(),         // Index 4
+    const ExpenseTrackingPage(),
+    const ChatModuleList(),
+    const HomePage(),
+    const PetProfilePage(),
+    const ProfilePage(),
   ];
 
   @override
   void initState() {
     super.initState();
     _fetchUnreadChats();
-    // 每隔 3 秒刷新一次全局未读消息数量
     _chatBadgeTimer = Timer.periodic(const Duration(seconds: 3), (_) => _fetchUnreadChats());
   }
 
@@ -126,7 +124,6 @@ class _MainNavigationState extends State<MainNavigation> {
         showUnselectedLabels: true,
         items: [
           const BottomNavigationBarItem(icon: Icon(Icons.account_balance_wallet), label: "Expense"),
-          // Chat 图标加上了 Badge 提醒
           BottomNavigationBarItem(
             icon: Badge(
               isLabelVisible: _totalUnreadChats > 0,
@@ -318,9 +315,6 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// ==========================================
-// 全新页面：用户专属的通知中心列表
-// ==========================================
 class SystemNotificationsPage extends StatefulWidget {
   const SystemNotificationsPage({super.key});
 

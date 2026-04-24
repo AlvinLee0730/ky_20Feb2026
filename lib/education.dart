@@ -2,12 +2,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart'; // 用于打开视频链接
-
-// 确保导入私聊页面
+import 'package:url_launcher/url_launcher.dart';
 import 'chat.dart';
 
-// 预设的专业宠物教育分类
+
 const List<String> educationCategories = [
   'Health & Wellness',
   'Training & Behavior',
@@ -25,7 +23,7 @@ class EducationPage extends StatefulWidget {
 class _EducationPageState extends State<EducationPage> {
   final _supabase = Supabase.instance.client;
   String _userRole = 'User';
-  String _selectedFilterCategory = 'All'; // 用于顶部过滤器
+  String _selectedFilterCategory = 'All';
 
   late final Stream<List<Map<String, dynamic>>> _educationStream;
 
@@ -33,7 +31,6 @@ class _EducationPageState extends State<EducationPage> {
   void initState() {
     super.initState();
     _checkUserRole();
-    // 全局初始化 Stream 保证不闪烁
     _educationStream = _supabase.from('pet_material').stream(primaryKey: ['materialID']).order('materialID', ascending: false);
   }
 
@@ -53,7 +50,6 @@ class _EducationPageState extends State<EducationPage> {
     return "PM${(ids.last + 1).toString().padLeft(5, '0')}";
   }
 
-  // 专属的错误提示弹窗
   void _showErrorDialog(String message) {
     showDialog(
       context: context,
@@ -76,7 +72,6 @@ class _EducationPageState extends State<EducationPage> {
     );
   }
 
-  // 构建紧凑型的单选按钮
   Widget _buildRadioOption(String title, int value, int groupValue, Function(int) onChanged) {
     return InkWell(
       onTap: () => onChanged(value),
@@ -97,12 +92,10 @@ class _EducationPageState extends State<EducationPage> {
     );
   }
 
-  // 呼出创建/编辑表单
   void _showForm({Map<String, dynamic>? item}) {
     final titleController = TextEditingController(text: item?['title']);
     final contentController = TextEditingController(text: item?['content']);
 
-    // 🌟 处理自定义分类的逻辑
     String selectedCategory = educationCategories.first;
     bool isCustomCategory = false;
     final customCategoryController = TextEditingController();
@@ -111,16 +104,14 @@ class _EducationPageState extends State<EducationPage> {
       if (educationCategories.contains(item['category'])) {
         selectedCategory = item['category'];
       } else {
-        selectedCategory = 'Add Custom'; // 🌟 改为 Add Custom
+        selectedCategory = 'Add Custom';
         isCustomCategory = true;
         customCategoryController.text = item['category'];
       }
     }
 
-    // 🌟 加入 'Add Custom' 作为下拉菜单的最后一项
     final List<String> dropdownOptions = [...educationCategories, 'Add Custom'];
 
-    // 0: Images, 1: Local Video, 2: YouTube
     int mediaTypeIndex = 0;
     List<XFile> selectedImages = [];
     XFile? selectedVideo;
@@ -159,7 +150,6 @@ class _EducationPageState extends State<EducationPage> {
                 }
 
                 Future<void> savePost() async {
-                  // 决定最终要保存的 category
                   String finalCategory = isCustomCategory ? customCategoryController.text.trim() : selectedCategory;
 
                   if (finalCategory.isEmpty) {
@@ -183,7 +173,6 @@ class _EducationPageState extends State<EducationPage> {
                     List<String> uploadedImageUrls = [];
                     String? finalVideoUrl;
 
-                    // 1. 处理图片上传
                     if (mediaTypeIndex == 0 && selectedImages.isNotEmpty) {
                       for (int i = 0; i < selectedImages.length; i++) {
                         final file = File(selectedImages[i].path);
@@ -193,8 +182,6 @@ class _EducationPageState extends State<EducationPage> {
                         uploadedImageUrls.add(_supabase.storage.from('pet_materials').getPublicUrl(fileName));
                       }
                     }
-
-                    // 2. 处理本地视频上传
                     if (mediaTypeIndex == 1 && selectedVideo != null) {
                       final file = File(selectedVideo!.path);
                       final ext = file.path.split('.').last;
@@ -203,7 +190,6 @@ class _EducationPageState extends State<EducationPage> {
                       finalVideoUrl = _supabase.storage.from('pet_materials').getPublicUrl(fileName);
                     }
 
-                    // 3. 处理 YouTube 链接
                     if (mediaTypeIndex == 2 && youtubeController.text.isNotEmpty) {
                       finalVideoUrl = youtubeController.text.trim();
                     }
@@ -211,19 +197,19 @@ class _EducationPageState extends State<EducationPage> {
                     final postData = {
                       'title': titleController.text.trim(),
                       'content': contentController.text.trim(),
-                      'category': finalCategory, // 使用最终决定好的 category
+                      'category': finalCategory,
                       'mediaURLs': uploadedImageUrls.isNotEmpty ? uploadedImageUrls : (item?['mediaURLs'] ?? []),
                       'videoURL': finalVideoUrl ?? item?['videoURL'],
                     };
 
                     if (item == null) {
-                      // 新增
+
                       postData['materialID'] = await _generateMaterialID();
                       postData['userID'] = _supabase.auth.currentUser!.id;
                       postData['isApproved'] = (_userRole == 'Admin');
                       await _supabase.from('pet_material').insert(postData);
                     } else {
-                      // 更新
+
                       await _supabase.from('pet_material').update(postData).eq('materialID', item['materialID']);
                     }
 
@@ -268,7 +254,7 @@ class _EducationPageState extends State<EducationPage> {
                                 if (val != null) {
                                   setModalState(() {
                                     selectedCategory = val;
-                                    isCustomCategory = (val == 'Add Custom'); // 🌟 判断是否是 Add Custom
+                                    isCustomCategory = (val == 'Add Custom');
                                   });
                                 }
                               },
@@ -276,7 +262,7 @@ class _EducationPageState extends State<EducationPage> {
                           ),
                         ),
 
-                        // 如果选了 Add Custom，展示输入框让用户自己写
+
                         if (isCustomCategory) ...[
                           TextField(
                             controller: customCategoryController,
@@ -394,8 +380,7 @@ class _EducationPageState extends State<EducationPage> {
                 List<Map<String, dynamic>> items = snapshot.data!.where((item) {
                   bool isApprovedOrMine = item['isApproved'] == true || item['userID'] == currentUserId || _userRole == 'Admin';
 
-                  // 如果是选了 All 或者是预设分类，进行匹配
-                  // 如果这篇帖子是自定义分类，且没有选中这个预设分类，它也会在 'All' 里面显示
+
                   bool matchesFilter = _selectedFilterCategory == 'All' || item['category'] == _selectedFilterCategory;
 
                   return isApprovedOrMine && matchesFilter;
@@ -500,9 +485,7 @@ class _EducationPageState extends State<EducationPage> {
   }
 }
 
-// ==========================================
-// 🌟 详情页
-// ==========================================
+
 class EducationDetailScreen extends StatefulWidget {
   final Map<String, dynamic> article;
   const EducationDetailScreen({super.key, required this.article});
@@ -514,7 +497,7 @@ class EducationDetailScreen extends StatefulWidget {
 class _EducationDetailScreenState extends State<EducationDetailScreen> {
   final _supabase = Supabase.instance.client;
 
-  // 发帖人信息
+
   String _authorName = "Unknown User";
   String? _authorPhoto;
 
@@ -524,7 +507,7 @@ class _EducationDetailScreenState extends State<EducationDetailScreen> {
     _loadAuthorData();
   }
 
-  // 从 users 表抓取头像和名字
+
   Future<void> _loadAuthorData() async {
     try {
       final userId = widget.article['userID'];
@@ -542,7 +525,6 @@ class _EducationDetailScreenState extends State<EducationDetailScreen> {
     }
   }
 
-  // 跳转去私聊
   void _goToChat(String? targetId, String targetName) {
     final myId = _supabase.auth.currentUser?.id;
     if (targetId == null) return;
@@ -555,8 +537,6 @@ class _EducationDetailScreenState extends State<EducationDetailScreen> {
 
   Future<void> _launchVideoUrl(BuildContext context, String url) async {
     String finalUrl = url.trim();
-
-    // 强制自动补全 https:// 协议，否则 url_launcher 会毫无反应
     if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
       finalUrl = 'https://$finalUrl';
     }
@@ -641,9 +621,7 @@ class _EducationDetailScreenState extends State<EducationDetailScreen> {
                   Text(widget.article['title'] ?? '', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 15),
 
-                  // ==========================================
-                  // 🌟 Clickable 聊天头像栏
-                  // ==========================================
+
                   InkWell(
                     onTap: () {
                       final targetId = widget.article['userID'];
@@ -679,8 +657,6 @@ class _EducationDetailScreenState extends State<EducationDetailScreen> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  // ==========================================
-
                   Text(widget.article['content'] ?? '', style: const TextStyle(fontSize: 16, height: 1.5)),
                   const SizedBox(height: 40),
                 ],

@@ -3,8 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
-
-// --- 请确保这里正确引入了您的 chat.dart 文件 ---
 import 'chat.dart';
 
 class ForumPage extends StatefulWidget {
@@ -17,7 +15,6 @@ class ForumPage extends StatefulWidget {
 class _ForumPageState extends State<ForumPage> {
   final SupabaseClient supabase = Supabase.instance.client;
 
-  // Controllers
   final _titleController = TextEditingController();
   final _contentController = TextEditingController();
   final _tagsController = TextEditingController();
@@ -31,14 +28,12 @@ class _ForumPageState extends State<ForumPage> {
   String? _currentUserId;
   String _userRole = 'User';
 
-  // 多图和多标签的状态
   List<File> _newImageFiles = [];
   List<String> _existingImageUrls = [];
   List<String> _addedTags = [];
 
-  // --- 分页相关状态 ---
   int _currentPage = 0;
-  final int _itemsPerPage = 5; // 论坛帖子较高，每页显示5条刚刚好
+  final int _itemsPerPage = 5;
 
   @override
   void initState() {
@@ -98,7 +93,7 @@ class _ForumPageState extends State<ForumPage> {
         final tags = (post['tags'] ?? "").toString().toLowerCase();
         return title.contains(query) || tags.contains(query);
       }).toList();
-      _currentPage = 0; // 搜索时重置回第一页
+      _currentPage = 0;
     });
   }
 
@@ -439,7 +434,6 @@ class _ForumPageState extends State<ForumPage> {
     );
   }
 
-  // --- 分页控件 UI ---
   Widget _buildPagination(int total) {
     return Container(
       padding: const EdgeInsets.only(top: 10, bottom: 25),
@@ -461,7 +455,6 @@ class _ForumPageState extends State<ForumPage> {
     );
   }
 
-  // --- 包含分页逻辑的 body 渲染 ---
   Widget _buildForumBody() {
     if (_filteredPosts.isEmpty) {
       return RefreshIndicator(
@@ -478,11 +471,9 @@ class _ForumPageState extends State<ForumPage> {
       );
     }
 
-    // 分页计算
     int totalPages = (_filteredPosts.length / _itemsPerPage).ceil();
     if (totalPages == 0) totalPages = 1;
 
-    // 如果当前页码超出了实际页数（比如删除了帖子或者搜索后变少了），重置页码
     if (_currentPage >= totalPages) {
       _currentPage = totalPages - 1;
     }
@@ -497,7 +488,7 @@ class _ForumPageState extends State<ForumPage> {
           child: RefreshIndicator(
             onRefresh: _fetchPosts,
             child: ListView.builder(
-              physics: const AlwaysScrollableScrollPhysics(), // 确保即使帖子很少也可以下拉刷新
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(10),
               itemCount: pagedPosts.length,
               itemBuilder: (context, index) {
@@ -581,7 +572,6 @@ class _ForumPageState extends State<ForumPage> {
             ),
           ),
         ),
-        // 分页指示器
         _buildPagination(totalPages),
       ],
     );
@@ -620,9 +610,6 @@ class _ForumPageState extends State<ForumPage> {
   }
 }
 
-// -------------------------------------------------------------
-// POST DETAIL PAGE
-// -------------------------------------------------------------
 class PostDetailPage extends StatefulWidget {
   final Map<String, dynamic> post;
   const PostDetailPage({super.key, required this.post});
@@ -669,7 +656,6 @@ class _PostDetailPageState extends State<PostDetailPage> {
     );
   }
 
-  // --- 跳转到聊天界面的核心方法 ---
   void _goToChat(String? targetId, String targetName) {
     final myId = supabase.auth.currentUser?.id;
 
@@ -680,7 +666,6 @@ class _PostDetailPageState extends State<PostDetailPage> {
       return;
     }
 
-    // 防止自己和自己聊天
     if (targetId == myId) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("You cannot start a chat with yourself."))
@@ -688,7 +673,6 @@ class _PostDetailPageState extends State<PostDetailPage> {
       return;
     }
 
-    // 导航到 ChatPage
     Navigator.push(
       context,
       MaterialPageRoute(

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:intl/intl.dart'; // 🌟 新增：导入日期格式化工具
+import 'package:intl/intl.dart';
 
 class AdminApprovalPage extends StatefulWidget {
   const AdminApprovalPage({super.key});
@@ -11,8 +11,6 @@ class AdminApprovalPage extends StatefulWidget {
 class _AdminApprovalPageState extends State<AdminApprovalPage> {
   final _supabase = Supabase.instance.client;
   final Set<String> _processedIds = {};
-
-  // 万能图片解析器
   String? _extractImage(Map<String, dynamic> item) {
     try {
       final possibleImageKeys = [
@@ -46,32 +44,26 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
     return null;
   }
 
-  // 字段名格式化工具 (把 lostPostID 变成 LOST POST ID)
   String _formatFieldName(String key) {
     String formatted = key.replaceAll('_', ' ');
     formatted = formatted.replaceAllMapped(RegExp(r'(?<=[a-z])([A-Z])'), (Match m) => ' ${m.group(1)}');
     return formatted.toUpperCase();
   }
 
-  // 🌟 新增：专门用来处理“机器时间”变成“人类时间”的工具
   String _formatValue(String key, dynamic val) {
     String strVal = val.toString();
 
-    // 如果这个字段的名称里包含 date, time 或者 created_at，说明它是时间
     if (key.toLowerCase().contains('date') || key.toLowerCase().contains('time') || key.toLowerCase() == 'created_at') {
       try {
-        // 把数据库的 UTC 时间转换成手机本地时间，并排版
         final parsedDate = DateTime.parse(strVal).toLocal();
         return DateFormat('MMM dd, yyyy, hh:mm a').format(parsedDate);
       } catch (e) {
-        // 如果万一解析失败，就原样显示，不至于报错
         return strVal;
       }
     }
     return strVal;
   }
 
-  // 接收 postOwnerId 以发送通知
   Future<void> _handleAction(String id, bool approve, String table, String idField, String? postOwnerId, {String? rejectReason}) async {
     setState(() {
       _processedIds.add(id);
@@ -122,7 +114,6 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
     }
   }
 
-  // 填写拒绝理由的弹窗
   void _showRejectDialog(String itemId, String table, String idKey, String? postOwnerId) {
     final TextEditingController reasonController = TextEditingController();
 
@@ -172,7 +163,6 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
     );
   }
 
-  // 弹窗展示详情
   Future<void> _showPostDetails(Map<String, dynamic> item, String table, String idKey, String itemId, String? postOwnerId) async {
     String? coverImage = _extractImage(item);
 
@@ -249,7 +239,6 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                     const Divider(),
                     const SizedBox(height: 8),
 
-                    // 安全遍历数据
                     ...item.keys.where((key) {
                       final val = item[key];
                       return val != null &&
@@ -264,7 +253,6 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                             children: [
                               TextSpan(text: "${_formatFieldName(key)}: ", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
 
-                              // 🌟 修改点：在这里呼叫时间格式化工具处理值
                               TextSpan(text: _formatValue(key, item[key])),
                             ],
                           ),

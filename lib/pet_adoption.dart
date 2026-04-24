@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
-import 'chat.dart'; // Ensure this is imported to access ChatPage
+import 'chat.dart';
 
 class PetAdoptionPage extends StatefulWidget {
   const PetAdoptionPage({super.key});
@@ -23,23 +23,19 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
   final _dobController = TextEditingController();
   final _remarkController = TextEditingController();
 
-  // --- 疫苗详细资料控制器 ---
   final _vaccineBrandController = TextEditingController();
   final _vaccineDateController = TextEditingController();
   final _nextDoseController = TextEditingController();
   final _vaccineRemarkController = TextEditingController();
   bool _vaccinated = false;
 
-  // --- 多图上传状态 ---
   List<File> _newImageFiles = [];
 
-  // --- 搜索与过滤状态 ---
   final _searchController = TextEditingController();
   String _searchQuery = "";
   String _ageFilter = 'All';
   bool? _vaccinatedFilter;
 
-  // --- Pagination State ---
   int _currentPage = 0;
   final int _itemsPerPage = 6;
 
@@ -107,7 +103,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
     return "AP${(nums.last + 1).toString().padLeft(5, '0')}";
   }
 
-  // --- 多图选择逻辑 ---
   Future<void> _pickImages(StateSetter setModalState) async {
     final pickedFiles = await ImagePicker().pickMultiImage();
     if (pickedFiles.isNotEmpty) {
@@ -203,7 +198,7 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
         'remark': _remarkController.text.trim(),
         'photoURL': imageUrlsStr,
         'isApproved': _userRole == 'Admin',
-        'status': 'Active', // 🌟 新增：发布时默认设置为 Active
+        'status': 'Active',
         'vaccineBrand': _vaccinated ? _vaccineBrandController.text.trim() : null,
         'lastVaccinationDate': _vaccinated ? _vaccineDateController.text : null,
         'nextDoseDate': _vaccinated ? _nextDoseController.text : null,
@@ -232,7 +227,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
     }
   }
 
-  // --- 筛选弹窗 ---
   void _showFilterModal() {
     String tempAge = _ageFilter;
     bool? tempVaccinated = _vaccinatedFilter;
@@ -389,7 +383,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
             bool isAdmin = _userRole == 'Admin';
             if (!isApproved && !isOwner && !isAdmin) return false;
 
-            // Search logic
             final String name = (post['petName'] ?? "").toString().toLowerCase();
             final String breed = (post['breed'] ?? "").toString().toLowerCase();
             if (_searchQuery.isNotEmpty && !name.contains(_searchQuery) && !breed.contains(_searchQuery)) {
@@ -465,7 +458,7 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
 
   Widget _buildGridItem(Map<String, dynamic> post, String? currentUserId) {
     bool isPending = post['isApproved'] == false;
-    bool isAdopted = post['status'] == 'Adopted'; // 🌟 检查是否已被领养
+    bool isAdopted = post['status'] == 'Adopted';
 
     String? firstImageUrl;
     if (post['photoURL'] != null && post['photoURL'].toString().isNotEmpty) {
@@ -493,7 +486,6 @@ class _PetAdoptionPageState extends State<PetAdoptionPage> {
                       ? Image.network(firstImageUrl, width: double.infinity, height: double.infinity, fit: BoxFit.cover)
                       : Container(color: Colors.grey[200], child: const Center(child: Icon(Icons.pets, color: Colors.grey))),
 
-                  // 🌟 领养/待审核徽章显示
                   if (isAdopted)
                     Positioned(
                       top: 10, right: 10,
@@ -770,7 +762,6 @@ class _PetDetailPageState extends State<PetDetailPage> {
   String? _authorPhoto;
   int _currentImageIndex = 0;
 
-  // 🌟 使用 _currentPost 以便动态刷新状态
   late Map<String, dynamic> _currentPost;
 
   @override
@@ -804,7 +795,6 @@ class _PetDetailPageState extends State<PetDetailPage> {
     Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: targetId, title: targetName)));
   }
 
-  // 🌟 新增：将宠物标记为已领养
   Future<void> _markAsAdopted() async {
     bool confirm = await showDialog(
         context: context,
@@ -825,7 +815,9 @@ class _PetDetailPageState extends State<PetDetailPage> {
     if (!confirm) return;
 
     try {
-      await _supabase.from('adoption_posts').update({'status': 'Adopted'}).eq('adoptionPostID', _currentPost['adoptionPostID']);
+      await _supabase.from('adoption_posts')
+          .update({'status': 'Adopted'})
+          .eq('adoptionPostID', _currentPost['adoptionPostID']);
 
       if (mounted) {
         setState(() {
@@ -850,7 +842,6 @@ class _PetDetailPageState extends State<PetDetailPage> {
 
     String ageDisplay = _currentPost['dateOfBirth'] == 'Unknown' ? 'Unknown' : "${_currentPost['age']} years";
 
-    // 🌟 判断状态
     final isMe = _currentPost['userID'] == _supabase.auth.currentUser?.id;
     final isAdopted = _currentPost['status'] == 'Adopted';
 
@@ -910,7 +901,6 @@ class _PetDetailPageState extends State<PetDetailPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 🌟 领养状态徽章
                   if (isAdopted) ...[
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -923,7 +913,6 @@ class _PetDetailPageState extends State<PetDetailPage> {
                   Text(_currentPost['petName'], style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
 
-                  // Clickable Uploaded By
                   InkWell(
                     onTap: () {
                       final targetId = _currentPost['userID'];
@@ -987,7 +976,6 @@ class _PetDetailPageState extends State<PetDetailPage> {
                   Text(_currentPost['remark'] ?? "No remarks.", style: const TextStyle(fontSize: 16)),
                   const SizedBox(height: 30),
 
-                  // 🌟 主人专属按钮区
                   if (isMe && !isAdopted) ...[
                     const Divider(),
                     const SizedBox(height: 10),

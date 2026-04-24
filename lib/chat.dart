@@ -4,9 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'dart:math';
 
-// ==========================================
-// 1. 聊天列表主页 (加入红点展示及全新搜索功能)
-// ==========================================
 class ChatModuleList extends StatefulWidget {
   const ChatModuleList({super.key});
 
@@ -82,9 +79,6 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
     } catch (e) {}
   }
 
-  // =========================================================
-  // 发起群聊核心逻辑
-  // =========================================================
   Future<void> _submitGroupChat(List<String> userIds, String groupName, BuildContext context) async {
     if (groupName.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please enter a group name")));
@@ -94,11 +88,8 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
       final String groupID = "CG${Random().nextInt(99999999)}";
       final String myID = _supabase.auth.currentUser!.id;
 
-      // 建立群组
       await _supabase.from('ChatGroup').insert({'chatGroupID': groupID, 'groupName': groupName, 'isPublic': false});
-      // 自己作为 Owner
       await _supabase.from('GroupMembers').insert({'chatGroupID': groupID, 'userID': myID, 'role': 'Owner'});
-      // 批量加入其他成员
       final membersData = userIds.map((id) => {'chatGroupID': groupID, 'userID': id, 'role': 'Member'}).toList();
       await _supabase.from('GroupMembers').insert(membersData);
 
@@ -109,9 +100,6 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
     }
   }
 
-  // =========================================================
-  // 全新的用户搜索与展示 BottomSheet
-  // =========================================================
   void _showUserSearchSheet({required bool isGroup}) {
     String searchQuery = '';
     List<dynamic> allUsers = [];
@@ -128,7 +116,6 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
         builder: (context) {
           return StatefulBuilder(
               builder: (context, setModalState) {
-                // 首次打开时获取所有用户
                 if (isLoading && allUsers.isEmpty) {
                   _supabase.from('users').select().neq('userID', _myID).then((data) {
                     if (mounted) {
@@ -143,7 +130,6 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
                   });
                 }
 
-                // 动态匹配搜索内容 (Username 不区分大小写模糊搜索)
                 List<dynamic> displayedUsers = [];
                 if (searchQuery.isNotEmpty) {
                   displayedUsers = allUsers.where((u) {
@@ -152,7 +138,6 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
                   }).toList();
                 }
 
-                // 提取 Recent Chats 用户并去重
                 List<dynamic> recentUsers = [];
                 final seen = <String>{};
                 for (var c in _recentConversations) {
@@ -161,13 +146,12 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
                     recentUsers.add({
                       'userID': uid,
                       'userName': c['userName'],
-                      'userEmail': c['userEmail'], // 如果你的视图里有这个字段最好
+                      'userEmail': c['userEmail'],
                       'userPhoto': c['userPhoto'],
                     });
                   }
                 }
 
-                // 用户列表项组件
                 Widget buildUserTile(dynamic u) {
                   final isSelected = selectedIds.contains(u['userID']);
                   final userName = u['userName'] ?? 'Unknown User';
@@ -202,7 +186,6 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
                           else selectedIds.add(u['userID']);
                         });
                       } else {
-                        // 直接跳去私聊页面
                         Navigator.pop(context);
                         Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(targetUserID: u['userID'], title: userName)));
                       }
@@ -338,7 +321,6 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
       body: TabBarView(
         controller: _tabController,
         children: [
-          // 私聊列表
           _recentConversations.isEmpty
               ? const Center(child: Text("No recent chats.\nClick the + button to start one!", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))
               : ListView.builder(
@@ -384,7 +366,6 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
               );
             },
           ),
-          // 群聊列表
           _myGroups.isEmpty
               ? const Center(child: Text("No groups yet.\nClick the + button to create one!", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))
               : ListView.builder(
@@ -426,9 +407,6 @@ class _ChatModuleListState extends State<ChatModuleList> with SingleTickerProvid
   }
 }
 
-// ==========================================
-// 2. 私聊页面 (加入已读标记功能)
-// ==========================================
 class ChatPage extends StatefulWidget {
   final String targetUserID;
   final String title;
@@ -452,7 +430,7 @@ class _ChatPageState extends State<ChatPage> {
     _loadMessages();
     _chatTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       _loadMessages();
-      _markAsRead(); // 不断把对方新发来的标记为已读
+      _markAsRead();
     });
   }
 
@@ -464,7 +442,6 @@ class _ChatPageState extends State<ChatPage> {
     super.dispose();
   }
 
-  // 通知数据库：把对方发给我的消息标为已读
   Future<void> _markAsRead() async {
     try {
       await _supabase.rpc('mark_private_messages_read', params: {
@@ -609,9 +586,6 @@ class _ChatPageState extends State<ChatPage> {
   }
 }
 
-// ==========================================
-// 3. 群聊页面 (加入已读标记功能)
-// ==========================================
 class GroupChatPage extends StatefulWidget {
   final String groupID;
   final String groupName;
@@ -637,7 +611,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
     _loadMessages();
     _chatTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       _loadMessages();
-      _markAsRead(); // 不断更新最后阅读时间
+      _markAsRead();
     });
   }
 
@@ -850,9 +824,6 @@ class _GroupChatPageState extends State<GroupChatPage> {
   }
 }
 
-// ==========================================
-// 4. 群组成员管理面板 (Owner/Admin 权限分级)
-// ==========================================
 class GroupManageDialog extends StatefulWidget {
   final String groupID;
   final String myRole;
@@ -995,7 +966,6 @@ class _GroupManageDialogState extends State<GroupManageDialog> {
             final role = m['role'];
             final isMe = user['userID'] == _supabase.auth.currentUser!.id;
 
-            // 根据我的权限，判断能对这个成员做什么操作
             List<PopupMenuEntry<String>> menuItems = [];
 
             if (!isMe) {

@@ -15,8 +15,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   final _supabase = Supabase.instance.client;
   final _amountController = TextEditingController();
   final _noteController = TextEditingController();
-
-  // 新增：用于自定义分类的控制器和状态
   final _customCategoryController = TextEditingController();
   bool _isCustomCategory = false;
 
@@ -25,8 +23,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   DateTime _focusedMonth = DateTime(DateTime.now().year, DateTime.now().month);
   DateTime? _selectedDay;
   bool _isSaving = false;
-
-  // 用于列表过滤的当前选中分类
   String _filterCategory = 'All';
 
   final Map<String, double> _monthlyBudgets = {};
@@ -45,7 +41,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     return _monthlyBudgets[key] ?? _defaultBudget;
   }
 
-  // 专属的错误提示弹窗
   void _showErrorDialog(String message) {
     showDialog(
       context: context,
@@ -68,7 +63,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
-  // 为每个分类固定一个颜色，用于饼图和图标
   Color _getCategoryColor(String cat) {
     switch (cat) {
       case 'Pet Food': return Colors.teal;
@@ -76,7 +70,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       case 'Pet Toy': return Colors.orange;
       case 'Grooming': return Colors.purpleAccent;
       case 'Others': return Colors.blueGrey;
-      default: return Colors.grey; // 自定义分类默认使用灰色
+      default: return Colors.grey;
     }
   }
 
@@ -86,13 +80,11 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       case 'Pet Toy': return Icons.toys;
       case 'Medical': return Icons.medical_services;
       case 'Grooming': return Icons.content_cut;
-      default: return Icons.payments; // 自定义分类默认使用支付图标
+      default: return Icons.payments;
     }
   }
 
-  // --- 高级数据分析逻辑 ---
   Map<String, dynamic> _calculateAdvancedAnalytics(List<Map<String, dynamic>> allData) {
-    // 1. 日期过滤：判断是看全月还是看某一天
     final dateFilteredData = allData.where((e) {
       DateTime d = DateTime.parse(e['date']);
       if (_selectedDay != null) {
@@ -102,11 +94,10 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     }).toList();
 
     double focusedTotal = 0;
-    double essentialTotal = 0; // 刚需：食物、医疗
-    double lifestyleTotal = 0; // 弹性：玩具、美容、其他
-    Map<String, double> categoryTotals = {}; // 记录每个分类的总花费
+    double essentialTotal = 0;
+    double lifestyleTotal = 0;
+    Map<String, double> categoryTotals = {};
 
-    // 提取所有出现过的分类，加上默认的几个选项，确保新创建的分类也会出现在筛选栏里
     Set<String> dynamicFilters = {'All', 'Pet Food', 'Pet Toy', 'Medical', 'Grooming', 'Others'};
 
     for (var e in dateFilteredData) {
@@ -125,7 +116,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       }
     }
 
-    // 2. 分类过滤（仅针对下方的列表显示起效，不影响饼图）
     final displayData = dateFilteredData.where((e) {
       if (_filterCategory == 'All') return true;
       return e['category'] == _filterCategory;
@@ -137,7 +127,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       'lifestyleTotal': lifestyleTotal,
       'categoryTotals': categoryTotals,
       'displayData': displayData,
-      'filterOptions': dynamicFilters.toList(), // 传出动态分类列表
+      'filterOptions': dynamicFilters.toList(),
     };
   }
 
@@ -197,17 +187,9 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
                       ),
                     ),
                   ),
-
-                // 1. Needs vs Wants 分析卡片
                 _buildAnalysisCard(stats['essentialTotal'], stats['lifestyleTotal']),
-
-                // 2. 消费占比饼图与具体分类金额
                 _buildPieChartAndLegend(stats['categoryTotals'], stats['focusedTotal']),
-
-                // 3. 预算进度条
                 _buildBudgetTracker(stats['focusedTotal']),
-
-                // 4. 分类过滤器与消费历史
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 25, 20, 10),
                   child: Row(
@@ -219,10 +201,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
                     ],
                   ),
                 ),
-
-                // 横向滚动的 Category Filter (传入动态分类)
                 _buildCategoryFilter(stats['filterOptions']),
-
                 stats['displayData'].isEmpty
                     ? const Padding(
                   padding: EdgeInsets.all(30),
@@ -249,7 +228,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
-  // --- UI 组件: 分析卡片 ---
   Widget _buildAnalysisCard(double essential, double lifestyle) {
     return Container(
       margin: const EdgeInsets.all(16),
@@ -304,7 +282,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
-  // --- UI 组件: 饼图及分类详情图例 (Category Breakdown) ---
   Widget _buildPieChartAndLegend(Map<String, double> categoryTotals, double totalSpent) {
     if (totalSpent == 0) {
       return const Padding(
@@ -346,7 +323,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
           ),
         ),
         const SizedBox(height: 20),
-        // 分类详情 (展示每个Category花了多少钱)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Wrap(
@@ -382,8 +358,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
-  // --- UI 组件: 预算 ---
-  // --- UI 组件: 预算 ---
   Widget _buildBudgetTracker(double spent) {
     double budget = _currentMonthBudget;
     double remaining = budget - spent;
@@ -405,7 +379,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // 当前已用金额
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -414,7 +387,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
                   Text("RM ${spent.toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.teal)),
                 ],
               ),
-              // 剩余金额
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -425,7 +397,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
                       style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 16,
-                          color: remaining >= 0 ? Colors.black87 : Colors.redAccent // 超出预算自动变红
+                          color: remaining >= 0 ? Colors.black87 : Colors.redAccent
                       )
                   ),
                 ],
@@ -447,7 +419,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
-  // --- UI 组件: 分类过滤条 ---
   Widget _buildCategoryFilter(List<String> filterOptions) {
     return Container(
       height: 50,
@@ -476,7 +447,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
-  // --- 列表项 ---
   Widget _buildExpenseItem(Map<String, dynamic> item) {
     bool isEssential = item['category'] == 'Pet Food' || item['category'] == 'Medical';
     return Container(
@@ -495,7 +465,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     );
   }
 
-  // --- 功能方法 ---
   Future<void> _pickViewDate() async {
     final picked = await showDatePicker(context: context, initialDate: _selectedDay ?? _focusedMonth, firstDate: DateTime(2020), lastDate: DateTime(2100));
     if (picked != null) setState(() { _selectedDay = picked; _focusedMonth = DateTime(picked.year, picked.month); });
@@ -529,7 +498,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
       _selectedDate = DateTime.parse(existingData['date']);
 
       String cat = existingData['category'];
-      // 如果已存在的数据是一个自定义分类，把它加到下拉菜单选项里，防止报错
       if (!dropdownItems.contains(cat)) {
         dropdownItems.insert(0, cat);
       }
@@ -583,7 +551,6 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
                 decoration: const InputDecoration(labelText: "Category", border: OutlineInputBorder()),
               ),
 
-              // 当选择了 'Add Custom...' 时显示自定义输入框
               if (_isCustomCategory) ...[
                 const SizedBox(height: 15),
                 TextField(
@@ -610,20 +577,17 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
   }
 
   Future<void> _saveExpense({Map<String, dynamic>? existingData}) async {
-    // 1. 验证：金额是否为空
     if (_amountController.text.trim().isEmpty) {
       _showErrorDialog('Please enter the expense amount!');
       return;
     }
 
-    // 2. 验证：金额是否为有效数字
     final parsedAmount = double.tryParse(_amountController.text.trim());
     if (parsedAmount == null || parsedAmount <= 0) {
       _showErrorDialog('Please enter a valid amount greater than 0!');
       return;
     }
 
-    // 3. 处理最终要保存的 Category
     String finalCategory = _selectedCategory;
     if (_isCustomCategory) {
       if (_customCategoryController.text.trim().isEmpty) {
@@ -637,7 +601,7 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
     try {
       final data = {
         'userID': _currentUID,
-        'category': finalCategory, // 使用最终决定的分类
+        'category': finalCategory,
         'amount': parsedAmount,
         'date': DateFormat('yyyy-MM-dd').format(_selectedDate),
         'note': _noteController.text.trim(),
@@ -650,9 +614,8 @@ class _ExpenseTrackingPageState extends State<ExpenseTrackingPage> {
         await _supabase.from('pet_expenses').update(data).eq('expenseID', existingData['expenseID']);
       }
 
-      if (mounted) Navigator.pop(context); // 成功后关闭弹窗
+      if (mounted) Navigator.pop(context);
     } catch (e) {
-      // 捕捉错误并弹出提示框
       _showErrorDialog('Error saving record: $e');
     } finally {
       if (mounted) setState(() => _isSaving = false);
