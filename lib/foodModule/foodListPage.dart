@@ -29,7 +29,6 @@ class _FoodListPageState extends State<FoodListPage> {
     try {
       final List<String> petIds =
       widget.pets.map((p) => p['petID'].toString()).toList();
-
       if (petIds.isEmpty) {
         setState(() {
           _foodRecords = [];
@@ -37,7 +36,6 @@ class _FoodListPageState extends State<FoodListPage> {
         });
         return;
       }
-
       final response = await supabase
           .from('food')
           .select()

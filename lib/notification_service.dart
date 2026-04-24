@@ -65,7 +65,7 @@ class NotificationService {
       return;
     }
 
-    final int id = petId.hashCode.abs();  // UUID -> int
+    final int id = petId.hashCode.abs();
 
     try {
       await _notifications.zonedSchedule(
@@ -109,25 +109,21 @@ class NotificationService {
     final now = tz.TZDateTime.now(tz.local);
     var scheduledTime = reminderTime;
 
-    // 先取消舊的（避免重複或舊的卡住）
     final int notificationId = scheduleId.hashCode.abs();
     await _notifications.cancel(notificationId);
 
     if (repeatType == 'None') {
-      // 一次性：如果已經過了，就不排
       if (scheduledTime.isBefore(now)) {
         print('Reminder time passed for one-time: $scheduleId');
         return;
       }
     } else {
-      // Repeating：調整到下一個未來時間
       while (scheduledTime.isBefore(now) || scheduledTime == now) {
         if (repeatType == 'Daily') {
           scheduledTime = scheduledTime.add(const Duration(days: 1));
         } else if (repeatType == 'Weekly') {
           scheduledTime = scheduledTime.add(const Duration(days: 7));
         } else if (repeatType == 'Monthly') {
-          // Monthly：加一個月，處理日期溢位（e.g. 31號 -> 下個月變 30/28/29）
           int nextMonth = scheduledTime.month + 1;
           int nextYear = scheduledTime.year;
           if (nextMonth > 12) {
@@ -144,7 +140,6 @@ class NotificationService {
               scheduledTime.minute,
             );
           } catch (e) {
-            // 日不存在 → 取該月最後一天
             final daysInMonth = DateTime(nextYear, nextMonth + 1, 0).day;
             scheduledTime = tz.TZDateTime(
               tz.local,
@@ -191,7 +186,7 @@ class NotificationService {
         ),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-        matchDateTimeComponents: matchComponent,  // 只在 repeating 時用
+        matchDateTimeComponents: matchComponent,
         payload: 'schedule:$scheduleId',
       );
       print('Scheduled $repeatType reminder - id: $notificationId | next: $scheduledTime');

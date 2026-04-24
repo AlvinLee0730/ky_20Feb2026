@@ -165,8 +165,6 @@ class _EditPetPageState extends State<EditPetPage> {
       final imageUrl = await _uploadImage();
       final userId = supabase.auth.currentUser!.id;
       final petID = widget.petData['petID'] as String;
-
-      // Cancel old notification
       final int oldNotificationId = petID.hashCode.abs();
       await NotificationService.cancel(oldNotificationId);
 
@@ -176,14 +174,14 @@ class _EditPetPageState extends State<EditPetPage> {
         'breed': _breed.text.trim(),
         'gender': _gender,
         'birthDate': _birthDate!.toIso8601String(),
-        // now safe because we checked
+
         'weight': double.tryParse(_weight.text.trim()) ?? 0.0,
         'vaccinationExpiry': _vaccinationExpiry?.toIso8601String(),
         'petPhoto': imageUrl,
         'remarks': _remarks.text.trim(),
       }).eq('petID', petID).eq('userID', userId);
 
-      // Reschedule if expiry date exists
+
       if (_vaccinationExpiry != null) {
         await NotificationService.scheduleVaccineReminder(
           petId: petID,

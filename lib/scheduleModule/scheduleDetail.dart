@@ -73,22 +73,15 @@ class _ScheduleDetailPageState extends State<ScheduleDetailPage> {
     if (confirm == true) {
       try {
         final String scheduleID = schedule['scheduleID'] as String;
-
-        // Calculate notification ID consistent with create/edit
         final int notifId = scheduleID.hashCode.abs();
-
-        // Cancel notifications
         await NotificationService.cancel(notifId);
         print('Cancelled schedule notification: scheduleID $scheduleID | notifId $notifId');
-
-        // Delete from Supabase
         await supabase.from('schedule').delete().eq('scheduleID', scheduleID);
-
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Schedule deleted successfully.')),
           );
-          Navigator.pop(context, true); // Return and refresh list
+          Navigator.pop(context, true);
         }
       } catch (e) {
         print('Error deleting schedule: $e');

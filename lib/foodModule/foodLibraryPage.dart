@@ -18,10 +18,10 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
 
   late TabController _tabController;
 
-  // 编辑模式
+  // Edit mode variable
   Map<String, dynamic>? _editingFood;
 
-  // 表单控制器
+  // Form controllers
   final _brandController = TextEditingController();
   final _nameController = TextEditingController();
   final _calController = TextEditingController();
@@ -39,8 +39,9 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
     _fetchLibraryItems();
 
     _tabController.addListener(() {
+      // Automatically cancel edit mode if user swipes/taps back to the list tab
       if (_tabController.index == 0 && _editingFood != null) {
-        _cancelEdit(); // 切换到列表页时自动取消编辑
+        _cancelEdit();
       }
     });
   }
@@ -58,6 +59,7 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
     super.dispose();
   }
 
+  // Fetch foods from database
   Future<void> _fetchLibraryItems() async {
     setState(() => _isLoading = true);
     try {
@@ -65,7 +67,7 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
       final res = await supabase
           .from('food_library')
           .select()
-          .or('userID.eq.$userID,userID.is.null')
+          .or('userID.eq.$userID,userID.is.null') // Fetch user's foods OR admin foods
           .order('itemName', ascending: true);
 
       setState(() => _libraryItems = List<Map<String, dynamic>>.from(res));
@@ -76,6 +78,7 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
     }
   }
 
+  // Trigger edit mode and switch to tab 2
   void _startEdit(Map<String, dynamic> food) {
     setState(() {
       _editingFood = food;
@@ -86,10 +89,11 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
       _fatController.text = (food['baseFat'] ?? 0).toString();
       _carbsController.text = (food['baseCarbs'] ?? 0).toString();
       _fiberController.text = (food['baseFiber'] ?? 0).toString();
-      _tabController.animateTo(1); // 自动切换到编辑页
+      _tabController.animateTo(1); // Auto-switch to the Add/Edit tab
     });
   }
 
+  // Cancel editing and clear the form
   void _cancelEdit() {
     setState(() {
       _editingFood = null;
@@ -97,6 +101,7 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
     });
   }
 
+  // Clear all text fields
   void _clearForm() {
     _brandController.clear();
     _nameController.clear();
@@ -133,7 +138,7 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
             .from('food_library')
             .update(data)
             .eq('libraryID', _editingFood!['libraryID'])
-            .eq('userID', supabase.auth.currentUser!.id);
+            .eq('userID', supabase.auth.currentUser!.id); // Security check
       } else {
         await supabase.from('food_library').insert({
           ...data,
@@ -157,6 +162,60 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+
+  Future<void> _deleteFood(Map<String, dynamic> food) async {
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Delete Food?"),
+        content: Text("Are you sure you want to delete '${food['itemName']}'?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Delete", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await supabase
+          .from('food_library')
+          .delete()
+          .eq('libraryID', food['libraryID'])
+          .eq('userID', supabase.auth.currentUser!.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Food deleted successfully!"), backgroundColor: Colors.teal),
+        );
+
+
+        if (_editingFood != null && _editingFood!['libraryID'] == food['libraryID']) {
+          _cancelEdit();
+        }
+
+        _fetchLibraryItems();
+      }
+    } catch (e) {
+      debugPrint("Delete error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text("Cannot delete food (It might be used in a feeding record). Error: $e"),
+              backgroundColor: Colors.redAccent
+          ),
+        );
+      }
     }
   }
 
@@ -197,7 +256,7 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
       body: TabBarView(
         controller: _tabController,
         children: [
-          // ==================== Tab 1: 食物列表 ====================
+          // ==================== Tab 1: Food List ====================
           _isLoading
               ? const Center(child: CircularProgressIndicator(color: Colors.teal))
               : RefreshIndicator(
@@ -221,9 +280,20 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
                         ? const Text("Admin Food", style: TextStyle(color: Colors.grey, fontSize: 12))
                         : null,
                     trailing: isOwnFood
-                        ? IconButton(
-                      icon: const Icon(Icons.edit, color: Colors.teal),
-                      onPressed: () => _startEdit(food),
+                        ? Row(
+                      mainAxisSize: MainAxisSize.min, // Essential to prevent layout errors in trailing
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit, color: Colors.teal),
+                          tooltip: 'Edit Food',
+                          onPressed: () => _startEdit(food),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          tooltip: 'Delete Food',
+                          onPressed: () => _deleteFood(food),
+                        ),
+                      ],
                     )
                         : null,
                   ),
@@ -232,7 +302,7 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> with SingleTickerProv
             ),
           ),
 
-          // ==================== Tab 2: 新增 / 编辑表单 ====================
+          // ==================== Tab 2: Add / Edit Form ====================
           SingleChildScrollView(
             padding: const EdgeInsets.all(20),
             child: Card(
