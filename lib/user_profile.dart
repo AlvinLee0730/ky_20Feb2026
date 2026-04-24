@@ -124,20 +124,16 @@ class _ProfilePageState extends State<ProfilePage> {
     setState(() => _isLoading = true);
 
     try {
-      // Update account status in "users" table
       await supabase
           .from('users')
           .update({'accountStatus': 'Deactivated'})
           .eq('userID', user.id);
-
-      // Sign out immediately
       await supabase.auth.signOut();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Account deactivated.')),
         );
-        // Navigate to login page and remove all previous routes
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => const LoginPage()),
               (route) => false,
@@ -162,8 +158,6 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _saveProfile() async {
     if (_user == null) return;
-
-    // 名字驗證
     if (_nameIsEmpty || _nameTooShort || _nameTooLong || _nameHasNumber) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -173,8 +167,6 @@ class _ProfilePageState extends State<ProfilePage> {
       );
       return;
     }
-
-    // 手機驗證（選填）
     if (_phoneInvalid) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -184,7 +176,6 @@ class _ProfilePageState extends State<ProfilePage> {
       );
       return;
     }
-
     setState(() => _isLoading = true);
 
     try {
@@ -192,13 +183,9 @@ class _ProfilePageState extends State<ProfilePage> {
 
       if (_pickedImage != null) {
         final bytes = await _pickedImage!.readAsBytes();
-
-        // 1. 大小檢查 (< 5MB)
         if (bytes.lengthInBytes > 5 * 1024 * 1024) {
           throw Exception('Image size exceeds 5MB limit');
         }
-
-        // 2. 類型檢查 (jpg/jpeg/png)
         final path = _pickedImage!.path.toLowerCase();
         final isValidType = path.endsWith('.jpg') ||
             path.endsWith('.jpeg') ||
@@ -213,16 +200,12 @@ class _ProfilePageState extends State<ProfilePage> {
         imageUrl = supabase.storage.from('user_photos').getPublicUrl(filePath);
       }
 
-      // 更新資料
       await supabase.from('users').update({
         'userName': _nameController.text.trim(),
         'phoneNumber': _phoneController.text.trim().isEmpty ? null : _phoneController.text.trim(),
         'userPhoto': imageUrl,
       }).eq('userID', _user!.userID);
-
-      // 重新載入資料
-      await _loadUserData();
-
+    await _loadUserData();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Profile updated successfully!')),

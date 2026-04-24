@@ -26,6 +26,7 @@ class _SchedulePageState extends State<SchedulePage> {
   // Filter fields
   String? _selectedPetId;
   DateTime? _startDate;
+  DateTime? _endDate; // Added end date variable
 
   @override
   void initState() {
@@ -57,9 +58,8 @@ class _SchedulePageState extends State<SchedulePage> {
           .select()
           .filter('petID', 'in', widget.petIds)
           .order('date', ascending: true);
-
       _schedules = List<Map<String, dynamic>>.from(scheduleResponse);
-      _applyFilter(); // 初始顯示全部
+      _applyFilter();
     } catch (e) {
       debugPrint('Error loading schedules: $e');
       setState(() {
@@ -143,6 +143,7 @@ class _SchedulePageState extends State<SchedulePage> {
   void _openFilterDialog() async {
     String? tempPetId = _selectedPetId;
     DateTime? tempStart = _startDate;
+    DateTime? tempEnd = _endDate; // Temporary end date for the dialog
 
     await showDialog(
       context: context,
@@ -153,6 +154,7 @@ class _SchedulePageState extends State<SchedulePage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Pet Selection
                 DropdownButtonFormField<String>(
                   value: tempPetId,
                   decoration: const InputDecoration(labelText: 'Pet'),
@@ -165,10 +167,12 @@ class _SchedulePageState extends State<SchedulePage> {
                   onChanged: (val) => setDialogState(() => tempPetId = val),
                 ),
                 const SizedBox(height: 12),
+
+                // Start Date Selection (From)
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   title: Text(
-                    'From: ${tempStart?.toLocal().toString().split(' ')[0] ?? 'Start Date'}',
+                    'From: ${tempStart?.toLocal().toString().split(' ')[0] ?? 'Select Start Date'}',
                   ),
                   trailing: const Icon(Icons.calendar_today),
                   onTap: () async {
@@ -178,7 +182,34 @@ class _SchedulePageState extends State<SchedulePage> {
                       firstDate: DateTime.now().subtract(const Duration(days: 365)),
                       lastDate: DateTime.now().add(const Duration(days: 365)),
                     );
-                    if (picked != null) setDialogState(() => tempStart = picked);
+                    if (picked != null) {
+                      setDialogState(() {
+                        tempStart = picked;
+                        // If start date is after end date, reset end date
+                        if (tempEnd != null && tempStart!.isAfter(tempEnd!)) {
+                          tempEnd = null;
+                        }
+                      });
+                    }
+                  },
+                ),
+
+                // End Date Selection (To)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    'To: ${tempEnd?.toLocal().toString().split(' ')[0] ?? 'Select End Date'}',
+                  ),
+                  trailing: const Icon(Icons.calendar_today),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: tempEnd ?? tempStart ?? DateTime.now(),
+                      // Restrict end date to not be before start date
+                      firstDate: tempStart ?? DateTime.now().subtract(const Duration(days: 365)),
+                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                    );
+                    if (picked != null) setDialogState(() => tempEnd = picked);
                   },
                 ),
               ],
@@ -190,6 +221,7 @@ class _SchedulePageState extends State<SchedulePage> {
                 setState(() {
                   _selectedPetId = null;
                   _startDate = null;
+                  _endDate = null; // Clear on reset
                   _applyFilter();
                 });
                 Navigator.pop(ctx);
@@ -205,6 +237,7 @@ class _SchedulePageState extends State<SchedulePage> {
                 setState(() {
                   _selectedPetId = tempPetId;
                   _startDate = tempStart;
+                  _endDate = tempEnd; // Save changes on apply
                   _applyFilter();
                 });
                 Navigator.pop(ctx);
@@ -220,16 +253,25 @@ class _SchedulePageState extends State<SchedulePage> {
   void _applyFilter() {
     setState(() {
       _filteredSchedules = _schedules.where((s) {
-        // 1. 日期比較使用 isAfter / isBefore 的邏輯
-        final scheduleDate = DateTime.tryParse(s['date'] ?? '') ?? DateTime(2000);
+        // Parse the date from the database
+        final parsedDate = DateTime.tryParse(s['date'] ?? '') ?? DateTime(2000);
 
+        // Format to pure date (remove time part to prevent comparison bugs between 23:59 and 00:00)
+        final scheduleDate = DateTime(parsedDate.year, parsedDate.month, parsedDate.day);
+
+        // 1. Match pet
         bool petMatch = _selectedPetId == null ||
             s['petID'].toString() == _selectedPetId.toString();
 
-        bool dateMatch = _startDate == null ||
-            !scheduleDate.isBefore(_startDate!);
+        // 2. Match start date (scheduleDate cannot be before _startDate)
+        bool startMatch = _startDate == null ||
+            !scheduleDate.isBefore(DateTime(_startDate!.year, _startDate!.month, _startDate!.day));
 
-        return petMatch && dateMatch;
+        // 3. Match end date (scheduleDate cannot be after _endDate)
+        bool endMatch = _endDate == null ||
+            !scheduleDate.isAfter(DateTime(_endDate!.year, _endDate!.month, _endDate!.day));
+
+        return petMatch && startMatch && endMatch;
       }).toList();
     });
   }

@@ -23,8 +23,6 @@ class _NutritionPageState extends State<NutritionPage> {
   double totalCarbs = 0.0;
   double totalFiber = 0.0;
   String dynamicTip = "Analyzing today's data...";
-
-  // Default target if weight fetch fails
   double dailyCaloryGoal = 300;
 
   @override
@@ -33,16 +31,13 @@ class _NutritionPageState extends State<NutritionPage> {
     _refreshData();
   }
 
-  // 刷新逻辑：获取体重 -> 获取今日营养
   Future<void> _refreshData() async {
     await _updatePetWeight();
     await _fetchTodayNutrition();
   }
 
-  // 1. 获取最新体重并计算每日建议热量 (RER)
   Future<void> _updatePetWeight() async {
     try {
-      // 这里的 petID 统一当做 String 处理 (兼容 UUID)
       final String petId = widget.petData['petID'].toString();
       final data = await supabase
           .from('pet')
@@ -53,11 +48,10 @@ class _NutritionPageState extends State<NutritionPage> {
       if (data != null && data['weight'] != null) {
         double weight = (data['weight'] as num).toDouble();
 
-        // RER Formula: 70 * (weight ^ 0.75)
         double rer = 70 * math.pow(weight, 0.75).toDouble();
 
         setState(() {
-          // MER = RER * 1.2 for normal adult maintenance
+
           dailyCaloryGoal = rer * 1.2;
           if (dailyCaloryGoal < 200) dailyCaloryGoal = 300.0;
         });
@@ -67,8 +61,6 @@ class _NutritionPageState extends State<NutritionPage> {
     }
   }
 
-  // 2. 从数据库获取今天的营养总和
-  // 2. 从数据库获取今天的营养总和
   Future<void> _fetchTodayNutrition() async {
     setState(() => _isLoading = true);
     final String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
@@ -92,8 +84,6 @@ class _NutritionPageState extends State<NutritionPage> {
           fib += (row['fiber'] as num? ?? 0.0).toDouble();
         }
       }
-
-      // 更豐富的動態提示（全英文）
       String tip = "Your pet's diet looks balanced today!";
 
       if (cal == 0) {

@@ -70,7 +70,8 @@ class _CreatePetPageState extends State<CreatePetPage> {
   }
 
   Future<void> _savePet() async {
-    // Required fields
+
+
     if (_nameHasError || _birthDateHasError || _genderHasError) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -80,8 +81,6 @@ class _CreatePetPageState extends State<CreatePetPage> {
       );
       return;
     }
-
-    // Optional but format-sensitive fields
     if (_weightIsInvalid) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -183,6 +182,11 @@ class _CreatePetPageState extends State<CreatePetPage> {
             ),
             const SizedBox(height: 15),
             TextField(controller: _species, decoration: _inputStyle('Species', Icons.category)),
+            const SizedBox(height: 15),
+            TextField(
+              controller: _breed,
+              decoration: _inputStyle('Breed', Icons.pets),
+            ),
             const SizedBox(height: 15),
             DropdownButtonFormField<String>(
               value: _gender,

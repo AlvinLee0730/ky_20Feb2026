@@ -104,21 +104,16 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
     setState(() => _isLoading = true);
 
     try {
-      // Prepare date string
       final dateStr =
           "${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2, '0')}-${_selectedDate!.day.toString().padLeft(2, '0')}";
-
-      // New time (minutes)
       final newStart = _startTime!.hour * 60 + _startTime!.minute;
       final newEnd = _endTime!.hour * 60 + _endTime!.minute;
-
-      // Query: same pet, same day, **exclude current schedule**
       final existing = await supabase
           .from('schedule')
           .select('startTime, endTime')
           .eq('petID', widget.schedule['petID'])
           .eq('date', dateStr)
-          .neq('scheduleID', widget.schedule['scheduleID']); // exclude this record
+          .neq('scheduleID', widget.schedule['scheduleID']);
 
       bool hasConflict = false;
 
@@ -195,7 +190,6 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
         _startTime!.minute,
       );
 
-      // Update Supabase
       await supabase.from('schedule').update({
         'scheduleType': _selectedType,
         'title': _selectedTitle,
@@ -205,13 +199,9 @@ class _EditSchedulePageState extends State<EditSchedulePage> {
         'endTime': endStr,
         'repeatType': _repeatType,
       }).eq('scheduleID', widget.schedule['scheduleID']);
-
-      // Cancel old notification
       final String scheduleID = widget.schedule['scheduleID'] as String;
       final int oldNotifId = scheduleID.hashCode.abs();
       await NotificationService.cancel(oldNotifId);
-
-      // Schedule new notification
       await NotificationService.scheduleEventReminder(
         scheduleId: scheduleID,
         title: _selectedTitle!,

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 
@@ -27,6 +28,7 @@ class _AddFoodPageState extends State<AddFoodPage> {
   final _amountController = TextEditingController();
   final _dateController = TextEditingController(text: DateFormat('yyyy-MM-dd').format(DateTime.now()));
   final _timeController = TextEditingController(text: DateFormat('HH:mm').format(DateTime.now()));
+  final _remarksController = TextEditingController(); // 🟢 新增的 Remarks 控制器
 
   // Add New Food
   final _brandController = TextEditingController();
@@ -54,6 +56,7 @@ class _AddFoodPageState extends State<AddFoodPage> {
     _amountController.dispose();
     _dateController.dispose();
     _timeController.dispose();
+    _remarksController.dispose(); // 🟢 记得释放
     _brandController.dispose();
     _nameController.dispose();
     _calController.dispose();
@@ -76,7 +79,6 @@ class _AddFoodPageState extends State<AddFoodPage> {
           .order('itemName', ascending: true);
 
       setState(() => _libraryItems = List.from(res));
-      debugPrint("Loaded ${_libraryItems.length} foods");
     } catch (e) {
       debugPrint("Fetch library error: $e");
       if (mounted) {
@@ -89,7 +91,6 @@ class _AddFoodPageState extends State<AddFoodPage> {
     }
   }
 
-  // ====================== 保存喂食记录 ======================
   Future<void> _saveFoodRecord() async {
     if (_selectedPetID == null || _selectedLibraryItem == null || _amountController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -104,28 +105,33 @@ class _AddFoodPageState extends State<AddFoodPage> {
       final ratio = amount / 100;
       final item = _selectedLibraryItem!;
 
-      await Future.wait([
-        supabase.from('food').insert({
-          'petID': _selectedPetID,
-          'foodName': item['itemName'],
-          'brand': item['brand'] ?? '',
-          'amount': amount,
-          'unit': _selectedUnit,
-          'feedingDate': _dateController.text,
-          'feedingTime': _timeController.text,
-        }),
-        supabase.from('nutrition').insert({
-          'petID': _selectedPetID,
-          'foodName': item['itemName'],
-          'calory': (item['baseCalory'] ?? 0) * ratio,
-          'protein': (item['baseProtein'] ?? 0) * ratio,
-          'fat': (item['baseFat'] ?? 0) * ratio,
-          'carbs': (item['baseCarbs'] ?? 0) * ratio,
-          'fiber': (item['baseFiber'] ?? 0) * ratio,
-          'date': _dateController.text,
-          'nutritionTip': (item['baseCalory'] ?? 0) * ratio > 250 ? "High calorie portion" : "Normal portion",
-        }),
-      ]);
+      // 🟢 1. 先插入 food 记录，并要求返回生成的数据 (.select().single())
+      final foodResponse = await supabase.from('food').insert({
+        'petID': _selectedPetID,
+        'foodName': item['itemName'],
+        'brand': item['brand'] ?? '',
+        'amount': amount,
+        'unit': _selectedUnit,
+        'feedingDate': _dateController.text,
+        'feedingTime': _timeController.text,
+        'remarks': _remarksController.text.trim(), // 🟢 保存 Remarks
+      }).select().single();
+
+      final newFoodID = foodResponse['foodID']; // 提取刚刚生成的 foodID
+
+      // 🟢 2. 再插入 nutrition 记录，绑定 foodID
+      await supabase.from('nutrition').insert({
+        'foodID': newFoodID, // 🟢 关键：建立一一对应的关联
+        'petID': _selectedPetID,
+        'foodName': item['itemName'],
+        'calory': (item['baseCalory'] ?? 0) * ratio,
+        'protein': (item['baseProtein'] ?? 0) * ratio,
+        'fat': (item['baseFat'] ?? 0) * ratio,
+        'carbs': (item['baseCarbs'] ?? 0) * ratio,
+        'fiber': (item['baseFiber'] ?? 0) * ratio,
+        'date': _dateController.text,
+        'nutritionTip': (item['baseCalory'] ?? 0) * ratio > 250 ? "High calorie portion" : "Normal portion",
+      });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -135,7 +141,9 @@ class _AddFoodPageState extends State<AddFoodPage> {
       }
     } catch (e) {
       debugPrint("Save error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to save: $e")));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to save: $e")));
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -172,7 +180,9 @@ class _AddFoodPageState extends State<AddFoodPage> {
       }
     } catch (e) {
       debugPrint("Library save error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to save: $e")));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to save: $e")));
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -227,6 +237,12 @@ class _AddFoodPageState extends State<AddFoodPage> {
               ),
               const SizedBox(height: 20),
 
+              if (_isLoadingLibrary && _selectedMode == 'record')
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 16.0),
+                  child: LinearProgressIndicator(color: Colors.teal),
+                ),
+
               if (_selectedMode == 'record') ...[
                 DropdownButtonFormField<String>(
                   value: _selectedPetID,
@@ -257,12 +273,14 @@ class _AddFoodPageState extends State<AddFoodPage> {
                 const SizedBox(height: 16),
 
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
                       flex: 2,
                       child: TextFormField(
                         controller: _amountController,
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'(^\d*\.?\d*)'))],
                         decoration: _inputStyle('Amount', icon: Icons.scale),
                       ),
                     ),
@@ -281,7 +299,7 @@ class _AddFoodPageState extends State<AddFoodPage> {
                 ),
                 const SizedBox(height: 16),
 
-                // 日期和时间横排（已加上日期验证）
+                // 日期和时间横排
                 Row(
                   children: [
                     Expanded(
@@ -290,8 +308,8 @@ class _AddFoodPageState extends State<AddFoodPage> {
                           final picked = await showDatePicker(
                             context: context,
                             initialDate: DateTime.now(),
-                            firstDate: DateTime(2000),           // 最早可选择2000年
-                            lastDate: DateTime.now(),            // 只能选今天或以前
+                            firstDate: DateTime(2000),
+                            lastDate: DateTime.now(),
                           );
                           if (picked != null) {
                             _dateController.text = DateFormat('yyyy-MM-dd').format(picked);
@@ -343,6 +361,14 @@ class _AddFoodPageState extends State<AddFoodPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 16),
+
+                // 🟢 新增：Remarks 输入框
+                TextFormField(
+                  controller: _remarksController,
+                  decoration: _inputStyle('Remarks (optional)', icon: Icons.notes),
+                  maxLines: 2,
+                ),
 
                 const SizedBox(height: 32),
 
@@ -358,9 +384,7 @@ class _AddFoodPageState extends State<AddFoodPage> {
                   ),
                   child: const Text('SAVE FEEDING RECORD', style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
-              ]
-
-              else ...[
+              ] else ...[
                 TextFormField(controller: _brandController, decoration: _inputStyle("Brand", icon: Icons.branding_watermark)),
                 const SizedBox(height: 12),
                 TextFormField(controller: _nameController, decoration: _inputStyle("Food Name *", icon: Icons.restaurant)),
@@ -368,15 +392,15 @@ class _AddFoodPageState extends State<AddFoodPage> {
 
                 const Text("Nutrition per 100g", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 12),
-                TextFormField(controller: _calController, keyboardType: TextInputType.number, decoration: _inputStyle("Calories", icon: Icons.local_fire_department)),
+                TextFormField(controller: _calController, keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'(^\d*\.?\d*)'))], decoration: _inputStyle("Calories", icon: Icons.local_fire_department)),
                 const SizedBox(height: 12),
-                TextFormField(controller: _proController, keyboardType: TextInputType.number, decoration: _inputStyle("Protein (g)", icon: Icons.fitness_center)),
+                TextFormField(controller: _proController, keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'(^\d*\.?\d*)'))], decoration: _inputStyle("Protein (g)", icon: Icons.fitness_center)),
                 const SizedBox(height: 12),
-                TextFormField(controller: _fatController, keyboardType: TextInputType.number, decoration: _inputStyle("Fat (g)", icon: Icons.opacity)),
+                TextFormField(controller: _fatController, keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'(^\d*\.?\d*)'))], decoration: _inputStyle("Fat (g)", icon: Icons.opacity)),
                 const SizedBox(height: 12),
-                TextFormField(controller: _carbsController, keyboardType: TextInputType.number, decoration: _inputStyle("Carbs (g)", icon: Icons.grain)),
+                TextFormField(controller: _carbsController, keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'(^\d*\.?\d*)'))], decoration: _inputStyle("Carbs (g)", icon: Icons.grain)),
                 const SizedBox(height: 12),
-                TextFormField(controller: _fiberController, keyboardType: TextInputType.number, decoration: _inputStyle("Fiber (g)", icon: Icons.eco)),
+                TextFormField(controller: _fiberController, keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'(^\d*\.?\d*)'))], decoration: _inputStyle("Fiber (g)", icon: Icons.eco)),
 
                 const SizedBox(height: 32),
 

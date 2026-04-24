@@ -257,7 +257,7 @@ class _RegisterPageState extends State<RegisterPage> {
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
-    final confirmPassword = _confirmPasswordController.text.trim(); // NEW
+    final confirmPassword = _confirmPasswordController.text.trim();
     final phone = _phoneController.text.trim();
 
     String? errorMsg;
@@ -267,7 +267,7 @@ class _RegisterPageState extends State<RegisterPage> {
       errorMsg = 'Invalid email';
     } else if (password.length < 8) {
       errorMsg = 'Password must be at least 8 characters';
-    } else if (password != confirmPassword) { // NEW
+    } else if (password != confirmPassword) {
       errorMsg = 'Passwords do not match';
     } else if (phone.isNotEmpty && _phoneInvalid) {
       errorMsg = 'Invalid Malaysian phone number';

@@ -2,15 +2,38 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 
-class NutritionHistoryPage extends StatelessWidget {
-  final String petID; // 接收 String 类型的 UUID
+class NutritionHistoryPage extends StatefulWidget {
+  final String petID;
   const NutritionHistoryPage({super.key, required this.petID});
 
   @override
-  Widget build(BuildContext context) {
-    final supabase = Supabase.instance.client;
-    final String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+  State<NutritionHistoryPage> createState() => _NutritionHistoryPageState();
+}
 
+class _NutritionHistoryPageState extends State<NutritionHistoryPage> {
+  final supabase = Supabase.instance.client;
+
+  // Store the future here so it only fetches ONCE when the page loads
+  late Future<List<dynamic>> _historyFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchHistory();
+  }
+
+  void _fetchHistory() {
+    final String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    _historyFuture = supabase
+        .from('nutrition')
+        .select()
+        .eq('petID', widget.petID)
+        .lt('date', today)
+        .order('date', ascending: false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
@@ -18,13 +41,8 @@ class NutritionHistoryPage extends StatelessWidget {
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
       ),
-      body: FutureBuilder(
-        future: supabase
-            .from('nutrition')
-            .select()
-            .eq('petID', petID)
-            .lt('date', today)
-            .order('date', ascending: false),
+      body: FutureBuilder<List<dynamic>>(
+        future: _historyFuture, // Use the stored future
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: Colors.teal));
@@ -34,7 +52,7 @@ class NutritionHistoryPage extends StatelessWidget {
             return Center(child: Text("Error: ${snapshot.error}"));
           }
 
-          final List rawData = snapshot.data as List? ?? [];
+          final List rawData = snapshot.data ?? [];
 
           if (rawData.isEmpty) {
             return const Center(
@@ -42,7 +60,7 @@ class NutritionHistoryPage extends StatelessWidget {
             );
           }
 
-          // 按日期分組求和（原邏輯不變）
+          // Group by date and calculate totals
           Map<String, Map<String, double>> dailyTotals = {};
 
           for (var row in rawData) {
@@ -59,13 +77,13 @@ class NutritionHistoryPage extends StatelessWidget {
 
           return Column(
             children: [
-              // 只加這一段提示
+              // Notice Banner (Translated to English to match the rest of the UI)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
                 color: Colors.teal.withOpacity(0.1),
                 child: const Text(
-                  "僅顯示過去記錄，今天的營養請查看當日總覽",
+                  "Showing past records only. Check today's overview for today's nutrition.",
                   style: TextStyle(color: Colors.teal, fontSize: 14),
                   textAlign: TextAlign.center,
                 ),
@@ -100,7 +118,8 @@ class NutritionHistoryPage extends StatelessWidget {
                             style: TextStyle(color: Colors.grey[700], height: 1.4),
                           ),
                         ),
-                        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                        // Removed the chevron_right icon to prevent confusion,
+                        // since there is no onTap detail page implemented yet.
                       ),
                     );
                   },

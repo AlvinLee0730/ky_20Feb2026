@@ -74,8 +74,6 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
       );
       return;
     }
-
-    // Validate start time < end time
     final startMinutes = _startTime!.hour * 60 + _startTime!.minute;
     final endMinutes = _endTime!.hour * 60 + _endTime!.minute;
 
@@ -121,8 +119,6 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
         try {
           final exStart = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
           final exEnd = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
-
-          // Overlap check
           if (!(newEnd <= exStart || newStart >= exEnd)) {
             hasConflict = true;
             break;
@@ -132,8 +128,6 @@ class _CreateSchedulePageState extends State<CreateSchedulePage> {
           continue;
         }
       }
-
-      // If time conflict → show confirmation dialog
       if (hasConflict) {
         final bool? proceed = await showDialog<bool>(
           context: context,

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/intl.dart';
 
 class EditFoodPage extends StatefulWidget {
-  final Map<String, dynamic> foodData; // 包含 petID, foodName, amount, feedingDate 等
+  final Map<String, dynamic> foodData;
+  // 预期 foodData 包含: foodID, petID, foodName, amount, unit, feedingDate, feedingTime, remarks 等
   const EditFoodPage({super.key, required this.foodData});
 
   @override
@@ -11,105 +14,142 @@ class EditFoodPage extends StatefulWidget {
 
 class _EditFoodPageState extends State<EditFoodPage> {
   final supabase = Supabase.instance.client;
-  final _formKey = GlobalKey<FormState>(); // 新增 FormKey
+  final _formKey = GlobalKey<FormState>();
 
   // Controllers
   late TextEditingController _nameController;
   late TextEditingController _amountController;
   late TextEditingController _remarksController;
+  late TextEditingController _dateController;
+  late TextEditingController _timeController;
 
+  String _selectedUnit = 'g';
   bool _isUpdating = false;
 
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.foodData['foodName']);
-    _amountController = TextEditingController(text: widget.foodData['amount'].toString());
+    // 初始化所有字段
+    _nameController = TextEditingController(text: widget.foodData['foodName'] ?? '');
+    _amountController = TextEditingController(text: widget.foodData['amount']?.toString() ?? '');
     _remarksController = TextEditingController(text: widget.foodData['remarks'] ?? '');
+
+    // 初始化日期和时间
+    _dateController = TextEditingController(
+        text: widget.foodData['feedingDate'] ?? DateFormat('yyyy-MM-dd').format(DateTime.now())
+    );
+    _timeController = TextEditingController(
+        text: widget.foodData['feedingTime'] ?? DateFormat('HH:mm').format(DateTime.now())
+    );
+
+    // 初始化单位，如果没有默认为 'g'
+    _selectedUnit = widget.foodData['unit'] ?? 'g';
+    if (!['g', 'ml', 'cup'].contains(_selectedUnit)) {
+      _selectedUnit = 'g';
+    }
   }
 
-  // ================= 核心：同步更新 Food 和 Nutrition =================
   Future<void> _updateFoodAndNutrition() async {
     setState(() => _isUpdating = true);
 
-    double oldAmount = double.tryParse(widget.foodData['amount'].toString()) ?? 1.0;
-    double newAmount = double.tryParse(_amountController.text) ?? 0.0;
+    // 1. 安全计算比例，防止除以 0
+    double oldAmount = double.tryParse(widget.foodData['amount']?.toString() ?? '1.0') ?? 1.0;
+    if (oldAmount == 0) oldAmount = 1.0; // 边缘情况防护
 
-    // 计算比例变化，用于更新 Nutrition 数据
-    // 逻辑：新营养 = 旧营养 * (新分量 / 旧分量)
+    double newAmount = double.tryParse(_amountController.text.trim()) ?? 0.0;
     double changeRatio = newAmount / oldAmount;
 
     try {
-      // 1. 更新 Food 表记录
+      // 2. 更新 food 表 (包含所有的修改项)
       await supabase.from('food').update({
         'amount': newAmount,
-        'remarks': _remarksController.text,
+        'unit': _selectedUnit,
+        'feedingDate': _dateController.text,
+        'feedingTime': _timeController.text,
+        'remarks': _remarksController.text.trim(),
       }).eq('foodID', widget.foodData['foodID']);
 
-      // 2. 更新 Nutrition 表记录
-      // 我们需要先找出对应的营养记录。由于你没有存 nutritionID，
-      // 我们用 petID + foodName + date (精确到天) 来匹配。
+      // 3. 通过 foodID 精确查找并更新 nutrition 表 (避免同日同宠物同食物的干扰)
       final nutritionRecords = await supabase
           .from('nutrition')
           .select()
-          .eq('petID', widget.foodData['petID'])
-          .eq('foodName', widget.foodData['foodName'])
-          .eq('date', widget.foodData['feedingDate']);
+          .eq('foodID', widget.foodData['foodID']); // ⚠️ 依赖你的 nutrition 表有 foodID 字段
 
       if (nutritionRecords.isNotEmpty) {
-        // 假设每次喂食对应一条营养记录，取第一条
-        final String nID = nutritionRecords[0]['nutritionID'];
+        final String nID = nutritionRecords[0]['nutritionID'].toString();
 
+        // 重新计算新的营养值
         await supabase.from('nutrition').update({
           'calory': (nutritionRecords[0]['calory'] as num) * changeRatio,
           'protein': (nutritionRecords[0]['protein'] as num) * changeRatio,
           'fat': (nutritionRecords[0]['fat'] as num) * changeRatio,
           'carbs': (nutritionRecords[0]['carbs'] as num) * changeRatio,
           'fiber': (nutritionRecords[0]['fiber'] as num) * changeRatio,
+          'date': _dateController.text, // 同步更新营养表的日期
           'nutritionTip': "Updated based on new amount",
         }).eq('nutritionID', nID);
       }
 
-      if (mounted) Navigator.pop(context, true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Record updated successfully!"), backgroundColor: Colors.teal),
+        );
+        Navigator.pop(context, true);
+      }
     } catch (e) {
       debugPrint("Update error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Update failed: $e")));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Update failed: $e")));
     } finally {
       if (mounted) setState(() => _isUpdating = false);
     }
   }
-
-
 
   Future<void> _deleteFoodAndNutrition() async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("Delete Record?"),
-        content: const Text("This will also remove the nutritional data for this meal."),
+        content: const Text("This will permanently remove this meal and its nutritional data."),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text("Delete", style: TextStyle(color: Colors.red))
+              child: const Text("Delete", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold))
           ),
         ],
       ),
     );
 
     if (confirm == true) {
+      setState(() => _isUpdating = true); // 借用 loading 状态防止重复点击
       try {
+        // ⚠️ 通过唯一的 foodID 进行精准删除
         await supabase.from('food').delete().eq('foodID', widget.foodData['foodID']);
-        await supabase.from('nutrition').delete()
-            .eq('petID', widget.foodData['petID'])
-            .eq('foodName', widget.foodData['foodName'])
-            .eq('date', widget.foodData['feedingDate']);
+        await supabase.from('nutrition').delete().eq('foodID', widget.foodData['foodID']);
 
-        if (mounted) Navigator.pop(context, true);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Record deleted."), backgroundColor: Colors.redAccent),
+          );
+          Navigator.pop(context, true);
+        }
       } catch (e) {
         debugPrint("Delete error: $e");
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Delete failed: $e")));
+      } finally {
+        if (mounted) setState(() => _isUpdating = false);
       }
     }
+  }
+
+  // 辅助方法：提取通用输入框样式
+  InputDecoration _inputStyle(String label) {
+    return InputDecoration(
+      labelText: label,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+      filled: true,
+      fillColor: Colors.white,
+    );
   }
 
   @override
@@ -122,93 +162,159 @@ class _EditFoodPageState extends State<EditFoodPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.delete_outline),
-            onPressed: _deleteFoodAndNutrition,
+            tooltip: 'Delete Record',
+            onPressed: _isUpdating ? null : _deleteFoodAndNutrition,
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            children: [
-              // Food Name - read only
-              TextFormField(
-                controller: _nameController,
-                readOnly: true,
-                decoration: const InputDecoration(
-                  labelText: "Food Name (Fixed)",
-                  filled: true,
-                  fillColor: Color(0xFFF5F5F5),
-                  border: OutlineInputBorder(),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 1. Food Name (只读)
+                TextFormField(
+                  controller: _nameController,
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    labelText: "Food Name (Fixed)",
+                    filled: true,
+                    fillColor: Color(0xFFF5F5F5),
+                    border: OutlineInputBorder(borderSide: BorderSide.none),
+                    prefixIcon: Icon(Icons.restaurant, color: Colors.grey),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 15),
+                const SizedBox(height: 16),
 
-              // Amount - with validation
-              TextFormField(
-                controller: _amountController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: "Amount (g/ml)",
-                  border: OutlineInputBorder(),
-                  hintText: "e.g. 85 or 120.5",
-                ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Please enter amount';
-                  }
-                  final num? numValue = num.tryParse(value);
-                  if (numValue == null) {
-                    return 'Please enter a valid number';
-                  }
-                  if (numValue <= 0) {
-                    return 'Amount must be greater than 0';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 15),
-
-              // Remarks - no validation, optional
-              TextFormField(
-                controller: _remarksController,
-                decoration: const InputDecoration(
-                  labelText: "Remarks (optional)",
-                  border: OutlineInputBorder(),
-                ),
-                maxLines: 3,
-              ),
-
-              const Spacer(),
-
-              ElevatedButton(
-                onPressed: _isUpdating
-                    ? null
-                    : () {
-                  if (_formKey.currentState!.validate()) {
-                    _updateFoodAndNutrition();
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text("Please fix the errors in the form"),
+                // 2. Amount 和 Unit (水平排列)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: TextFormField(
+                        controller: _amountController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        // 强制只能输入数字和小数点
+                        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'(^\d*\.?\d*)'))],
+                        decoration: _inputStyle("Amount").copyWith(hintText: "e.g. 85.5"),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) return 'Required';
+                          final num? numValue = num.tryParse(value);
+                          if (numValue == null || numValue <= 0) return 'Must be > 0';
+                          return null;
+                        },
                       ),
-                    );
-                  }
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal,
-                  minimumSize: const Size(double.infinity, 55),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        value: _selectedUnit,
+                        decoration: _inputStyle("Unit"),
+                        items: ['g', 'ml', 'cup']
+                            .map((u) => DropdownMenuItem(value: u, child: Text(u)))
+                            .toList(),
+                        onChanged: (val) => setState(() => _selectedUnit = val!),
+                      ),
+                    ),
+                  ],
                 ),
-                child: _isUpdating
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text(
-                  "Update Record",
-                  style: TextStyle(color: Colors.white, fontSize: 16),
+                const SizedBox(height: 16),
+
+                // 3. Date 和 Time (加回编辑页面)
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _dateController,
+                        readOnly: true,
+                        decoration: _inputStyle("Date").copyWith(
+                          prefixIcon: const Icon(Icons.calendar_today, color: Colors.teal, size: 20),
+                        ),
+                        onTap: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: DateTime.tryParse(_dateController.text) ?? DateTime.now(),
+                            firstDate: DateTime(2000),
+                            lastDate: DateTime.now(),
+                          );
+                          if (picked != null) {
+                            setState(() {
+                              _dateController.text = DateFormat('yyyy-MM-dd').format(picked);
+                            });
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _timeController,
+                        readOnly: true,
+                        decoration: _inputStyle("Time").copyWith(
+                          prefixIcon: const Icon(Icons.access_time, color: Colors.teal, size: 20),
+                        ),
+                        onTap: () async {
+                          // 解析现有的时间
+                          final parts = _timeController.text.split(':');
+                          TimeOfDay initialTime = TimeOfDay.now();
+                          if (parts.length == 2) {
+                            initialTime = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+                          }
+
+                          final picked = await showTimePicker(context: context, initialTime: initialTime);
+                          if (picked != null) {
+                            setState(() {
+                              _timeController.text = "${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}";
+                            });
+                          }
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+                const SizedBox(height: 16),
+
+                // 4. Remarks
+                TextFormField(
+                  controller: _remarksController,
+                  decoration: _inputStyle("Remarks (optional)"),
+                  maxLines: 3,
+                ),
+
+                const SizedBox(height: 32),
+
+                // 5. Submit Button
+                ElevatedButton(
+                  onPressed: _isUpdating
+                      ? null
+                      : () {
+                    if (_formKey.currentState!.validate()) {
+                      _updateFoodAndNutrition();
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("Please fix the errors above.")),
+                      );
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.teal,
+                    minimumSize: const Size(double.infinity, 55),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: _isUpdating
+                      ? const SizedBox(
+                    height: 24,
+                    width: 24,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                  )
+                      : const Text("UPDATE RECORD", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -220,6 +326,8 @@ class _EditFoodPageState extends State<EditFoodPage> {
     _nameController.dispose();
     _amountController.dispose();
     _remarksController.dispose();
+    _dateController.dispose();
+    _timeController.dispose();
     super.dispose();
   }
 }
